@@ -1,0 +1,103 @@
+import { Injectable } from '@nestjs/common';
+
+import { IUser } from 'src/common/consts/auth';
+import { CashTransaction, CashTransactionType } from 'src/common/database/schemas';
+import { HandledException } from 'src/common/error/http.error';
+
+import { CreateCashRegisterDto, CreateCashTransactionDto, QueryCashRegisterDto, UpdateCashRegisterDto } from './dto';
+import { CashRegisterWithRelations, VendorCashRegistersRepository } from './vendor-cash-registers.repository';
+
+@Injectable()
+export class VendorCashRegistersService {
+  constructor(private readonly repository: VendorCashRegistersRepository) {}
+
+  async createCashRegister(dto: CreateCashRegisterDto, user: IUser): Promise<CashRegisterWithRelations> {
+    const userOrgId = await this.repository.getUserOrgId(user.id);
+    if (!userOrgId || userOrgId !== user.orgId) {
+      HandledException.throw('USER_NOT_FOUND', 404);
+    }
+
+    const cashRegister = await this.repository.createCashRegister({
+      userId: user.id,
+      name: dto.name || 'Asosiy kashlok',
+    });
+
+    return this.findOneCashRegister(cashRegister.id, user);
+  }
+
+  async findAllCashRegisters(
+    query: QueryCashRegisterDto,
+    user: IUser,
+  ): Promise<{ data: CashRegisterWithRelations[]; total: number; page: number; limit: number }> {
+    const { page = 1, limit = 20 } = query;
+    const result = await this.repository.findAllCashRegisters(user.orgId, { page, limit });
+    return { ...result, page, limit };
+  }
+
+  async findOneCashRegister(id: string, user: IUser): Promise<CashRegisterWithRelations> {
+    const result = await this.repository.findCashRegisterById(id, user.orgId);
+    if (!result) {
+      HandledException.throw('CASH_REGISTER_NOT_FOUND', 404);
+    }
+    return result;
+  }
+
+  async updateCashRegister(id: string, dto: UpdateCashRegisterDto, user: IUser): Promise<CashRegisterWithRelations> {
+    await this.findOneCashRegister(id, user);
+    await this.repository.updateCashRegister(id, dto);
+    return this.findOneCashRegister(id, user);
+  }
+
+  async removeCashRegister(id: string, user: IUser): Promise<void> {
+    await this.findOneCashRegister(id, user);
+    await this.repository.deleteCashRegister(id);
+  }
+
+  async createCashTransaction(dto: CreateCashTransactionDto, user: IUser): Promise<CashTransaction> {
+    const cashRegisterOrgId = await this.repository.getCashRegisterOrgId(dto.cashRegisterId);
+    if (!cashRegisterOrgId || cashRegisterOrgId !== user.orgId) {
+      HandledException.throw('CASH_REGISTER_NOT_FOUND', 404);
+    }
+
+    const cashRegister = await this.repository.findCashRegisterById(dto.cashRegisterId, user.orgId);
+    if (!cashRegister) {
+      HandledException.throw('CASH_REGISTER_NOT_FOUND', 404);
+    }
+
+    const transaction = await this.repository.createCashTransaction({
+      cashRegisterId: dto.cashRegisterId,
+      type: dto.type,
+      amount: dto.amount,
+      note: dto.note,
+    });
+
+    const updateData: Partial<{
+      balance: number;
+      totalIn: number;
+      totalOut: number;
+    }> = {};
+
+    if (dto.type === CashTransactionType.IN) {
+      updateData.balance = cashRegister.balance + dto.amount;
+      updateData.totalIn = cashRegister.totalIn + dto.amount;
+    } else {
+      updateData.balance = cashRegister.balance - dto.amount;
+      updateData.totalOut = cashRegister.totalOut + dto.amount;
+    }
+
+    await this.repository.updateCashRegister(dto.cashRegisterId, updateData);
+
+    return transaction;
+  }
+
+  async findCashTransactions(
+    cashRegisterId: string,
+    user: IUser,
+    page = 1,
+    limit = 50,
+  ): Promise<{ data: CashTransaction[]; total: number; page: number; limit: number }> {
+    await this.findOneCashRegister(cashRegisterId, user);
+    const result = await this.repository.findCashTransactions(cashRegisterId, { page, limit });
+    return { ...result, page, limit };
+  }
+}
