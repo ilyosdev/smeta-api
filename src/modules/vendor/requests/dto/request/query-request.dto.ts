@@ -25,6 +25,10 @@ export class QueryRequestDto {
   @IsEnum(RequestStatus)
   status?: RequestStatus;
 
+  @ApiPropertyOptional({ enum: RequestStatus, isArray: true })
+  @IsOptional()
+  statuses?: RequestStatus[];
+
   @ApiPropertyOptional({ description: 'Filter by smeta item ID' })
   @IsOptional()
   @IsUUID()

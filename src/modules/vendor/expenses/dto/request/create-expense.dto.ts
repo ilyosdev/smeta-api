@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString, IsUUID, Min } from 'class-validator';
+import { IsBoolean, IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString, IsUUID, Min } from 'class-validator';
 
 import { ExpenseCategory, PaymentType } from 'src/common/database/schemas';
 
@@ -39,4 +39,9 @@ export class CreateExpenseDto {
   @IsUUID()
   @IsOptional()
   smetaItemId?: string;
+
+  @ApiPropertyOptional()
+  @IsBoolean()
+  @IsOptional()
+  isPaid?: boolean;
 }

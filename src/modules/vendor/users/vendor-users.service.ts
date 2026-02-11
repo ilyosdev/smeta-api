@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 
 import { IUser } from 'src/common/consts/auth';
-import { User } from 'src/common/database/schemas';
+import { User, UserRole } from 'src/common/database/schemas';
 import { HandledException } from 'src/common/error/http.error';
 
 import { CreateUserDto, QueryUserDto, UpdateUserDto } from './dto';
@@ -100,5 +100,9 @@ export class VendorUsersService {
     }
 
     await this.repository.delete(id, user.orgId);
+  }
+
+  async findByProjectAndRole(projectId: string, role: UserRole, user: IUser): Promise<User[]> {
+    return this.repository.findByProjectAndRole(projectId, role, user.orgId);
   }
 }

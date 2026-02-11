@@ -32,9 +32,9 @@ export class VendorExpensesRepository {
 
   async findAllExpenses(
     orgId: string,
-    params: { page: number; limit: number; projectId?: string; category?: ExpenseCategory },
+    params: { page: number; limit: number; projectId?: string; category?: ExpenseCategory; isPaid?: boolean },
   ): Promise<{ data: ExpenseWithRelations[]; total: number }> {
-    const { page, limit, projectId, category } = params;
+    const { page, limit, projectId, category, isPaid } = params;
     const offset = (page - 1) * limit;
 
     const conditions: ReturnType<typeof eq>[] = [eq(projects.orgId, orgId)];
@@ -43,6 +43,9 @@ export class VendorExpensesRepository {
     }
     if (category) {
       conditions.push(eq(expenses.category, category));
+    }
+    if (isPaid !== undefined) {
+      conditions.push(eq(expenses.isPaid, isPaid));
     }
 
     const [countResult] = await this.db
@@ -116,6 +119,12 @@ export class VendorExpensesRepository {
 
   async deleteExpense(id: string): Promise<void> {
     await this.db.delete(expenses).where(eq(expenses.id, id));
+  }
+
+  async updateExpense(id: string, data: Partial<NewExpense>): Promise<Expense> {
+    await this.db.update(expenses).set(data).where(eq(expenses.id, id));
+    const [result] = await this.db.select().from(expenses).where(eq(expenses.id, id));
+    return result;
   }
 
   async getProjectOrgId(projectId: string): Promise<string | null> {

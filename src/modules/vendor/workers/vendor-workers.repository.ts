@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, desc, eq, like, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/mysql-core';
 import { randomUUID } from 'crypto';
 
 import { Drizzle, DRIZZLE_ORM } from 'src/common/database/drizzle.module';
@@ -78,6 +79,14 @@ export class VendorWorkersRepository {
     return result ?? null;
   }
 
+  async findWorkerByUserId(userId: string, orgId: string): Promise<Worker | null> {
+    const [result] = await this.db
+      .select()
+      .from(workers)
+      .where(and(eq(workers.userId, userId), eq(workers.orgId, orgId)));
+    return result ?? null;
+  }
+
   async updateWorker(id: string, data: Partial<NewWorker>): Promise<Worker> {
     await this.db.update(workers).set(data).where(eq(workers.id, id));
     const [result] = await this.db.select().from(workers).where(eq(workers.id, id));
@@ -97,10 +106,12 @@ export class VendorWorkersRepository {
 
   async findWorkLogs(
     orgId: string,
-    params: { page: number; limit: number; workerId?: string; projectId?: string },
+    params: { page: number; limit: number; workerId?: string; projectId?: string; isPaid?: boolean },
   ): Promise<{ data: WorkLogWithRelations[]; total: number }> {
-    const { page, limit, workerId, projectId } = params;
+    const { page, limit, workerId, projectId, isPaid } = params;
     const offset = (page - 1) * limit;
+
+    const validatedByUser = alias(users, 'validated_by_user');
 
     const conditions: ReturnType<typeof eq>[] = [eq(projects.orgId, orgId)];
     if (workerId) {
@@ -109,6 +120,9 @@ export class VendorWorkersRepository {
     if (projectId) {
       conditions.push(eq(workLogs.projectId, projectId));
     }
+    if (isPaid !== undefined) {
+      conditions.push(eq(workLogs.isPaid, isPaid));
+    }
 
     const [countResult] = await this.db
       .select({ count: sql<number>`count(*)` })
@@ -116,116 +130,68 @@ export class VendorWorkersRepository {
       .innerJoin(projects, eq(workLogs.projectId, projects.id))
       .where(and(...conditions));
 
-    const loggedByUsers = this.db.$with('logged_by_users').as(
-      this.db.select({ id: users.id, name: users.name }).from(users),
-    );
-
     const results = await this.db
       .select({
         workLog: workLogs,
         project: { id: projects.id, name: projects.name },
         loggedBy: { id: users.id, name: users.name },
+        worker: { id: workers.id, name: workers.name },
+        smetaItem: { id: smetaItems.id, name: smetaItems.name },
+        validatedBy: { id: validatedByUser.id, name: validatedByUser.name },
       })
       .from(workLogs)
       .innerJoin(projects, eq(workLogs.projectId, projects.id))
       .innerJoin(users, eq(workLogs.loggedById, users.id))
+      .leftJoin(workers, eq(workLogs.workerId, workers.id))
+      .leftJoin(smetaItems, eq(workLogs.smetaItemId, smetaItems.id))
+      .leftJoin(validatedByUser, eq(workLogs.validatedById, validatedByUser.id))
       .where(and(...conditions))
       .orderBy(desc(workLogs.date))
       .limit(limit)
       .offset(offset);
 
-    const data: WorkLogWithRelations[] = [];
-    for (const r of results) {
-      let worker: { id: string; name: string } | null = null;
-      if (r.workLog.workerId) {
-        const [workerResult] = await this.db
-          .select({ id: workers.id, name: workers.name })
-          .from(workers)
-          .where(eq(workers.id, r.workLog.workerId));
-        worker = workerResult ?? null;
-      }
-
-      let smetaItem: { id: string; name: string } | null = null;
-      if (r.workLog.smetaItemId) {
-        const [itemResult] = await this.db
-          .select({ id: smetaItems.id, name: smetaItems.name })
-          .from(smetaItems)
-          .where(eq(smetaItems.id, r.workLog.smetaItemId));
-        smetaItem = itemResult ?? null;
-      }
-
-      let validatedBy: { id: string; name: string } | null = null;
-      if (r.workLog.validatedById) {
-        const [validatorResult] = await this.db
-          .select({ id: users.id, name: users.name })
-          .from(users)
-          .where(eq(users.id, r.workLog.validatedById));
-        validatedBy = validatorResult ?? null;
-      }
-
-      data.push({
-        ...r.workLog,
-        project: r.project,
-        worker,
-        smetaItem,
-        loggedBy: r.loggedBy,
-        validatedBy,
-      });
-    }
+    const data: WorkLogWithRelations[] = results.map((r) => ({
+      ...r.workLog,
+      project: r.project,
+      worker: r.worker?.id ? r.worker : null,
+      smetaItem: r.smetaItem?.id ? r.smetaItem : null,
+      loggedBy: r.loggedBy,
+      validatedBy: r.validatedBy?.id ? r.validatedBy : null,
+    }));
 
     return { data, total: Number(countResult.count) };
   }
 
   async findWorkLogById(id: string, orgId: string): Promise<WorkLogWithRelations | null> {
+    const validatedByUser = alias(users, 'validated_by_user');
+
     const results = await this.db
       .select({
         workLog: workLogs,
         project: { id: projects.id, name: projects.name },
         loggedBy: { id: users.id, name: users.name },
+        worker: { id: workers.id, name: workers.name },
+        smetaItem: { id: smetaItems.id, name: smetaItems.name },
+        validatedBy: { id: validatedByUser.id, name: validatedByUser.name },
       })
       .from(workLogs)
       .innerJoin(projects, eq(workLogs.projectId, projects.id))
       .innerJoin(users, eq(workLogs.loggedById, users.id))
+      .leftJoin(workers, eq(workLogs.workerId, workers.id))
+      .leftJoin(smetaItems, eq(workLogs.smetaItemId, smetaItems.id))
+      .leftJoin(validatedByUser, eq(workLogs.validatedById, validatedByUser.id))
       .where(and(eq(workLogs.id, id), eq(projects.orgId, orgId)));
 
     if (results.length === 0) return null;
 
     const r = results[0];
-
-    let worker: { id: string; name: string } | null = null;
-    if (r.workLog.workerId) {
-      const [workerResult] = await this.db
-        .select({ id: workers.id, name: workers.name })
-        .from(workers)
-        .where(eq(workers.id, r.workLog.workerId));
-      worker = workerResult ?? null;
-    }
-
-    let smetaItem: { id: string; name: string } | null = null;
-    if (r.workLog.smetaItemId) {
-      const [itemResult] = await this.db
-        .select({ id: smetaItems.id, name: smetaItems.name })
-        .from(smetaItems)
-        .where(eq(smetaItems.id, r.workLog.smetaItemId));
-      smetaItem = itemResult ?? null;
-    }
-
-    let validatedBy: { id: string; name: string } | null = null;
-    if (r.workLog.validatedById) {
-      const [validatorResult] = await this.db
-        .select({ id: users.id, name: users.name })
-        .from(users)
-        .where(eq(users.id, r.workLog.validatedById));
-      validatedBy = validatorResult ?? null;
-    }
-
     return {
       ...r.workLog,
       project: r.project,
-      worker,
-      smetaItem,
+      worker: r.worker?.id ? r.worker : null,
+      smetaItem: r.smetaItem?.id ? r.smetaItem : null,
       loggedBy: r.loggedBy,
-      validatedBy,
+      validatedBy: r.validatedBy?.id ? r.validatedBy : null,
     };
   }
 
@@ -319,6 +285,61 @@ export class VendorWorkersRepository {
     return result?.orgId ?? null;
   }
 
+  async findValidatedUnpaidWorkLogs(
+    orgId: string,
+    params: { workerId: string; projectId: string; page: number; limit: number },
+  ): Promise<{ data: WorkLogWithRelations[]; total: number }> {
+    const { workerId, projectId, page, limit } = params;
+    const offset = (page - 1) * limit;
+
+    const conditions: ReturnType<typeof eq>[] = [
+      eq(projects.orgId, orgId),
+      eq(workLogs.isValidated, true),
+      eq(workLogs.isPaid, false),
+      eq(workLogs.workerId, workerId),
+      eq(workLogs.projectId, projectId),
+    ];
+
+    const [countResult] = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(workLogs)
+      .innerJoin(projects, eq(workLogs.projectId, projects.id))
+      .where(and(...conditions));
+
+    const results = await this.db
+      .select({
+        workLog: workLogs,
+        project: { id: projects.id, name: projects.name },
+        loggedBy: { id: users.id, name: users.name },
+        worker: { id: workers.id, name: workers.name },
+        smetaItem: { id: smetaItems.id, name: smetaItems.name },
+      })
+      .from(workLogs)
+      .innerJoin(projects, eq(workLogs.projectId, projects.id))
+      .innerJoin(users, eq(workLogs.loggedById, users.id))
+      .leftJoin(workers, eq(workLogs.workerId, workers.id))
+      .leftJoin(smetaItems, eq(workLogs.smetaItemId, smetaItems.id))
+      .where(and(...conditions))
+      .orderBy(desc(workLogs.date))
+      .limit(limit)
+      .offset(offset);
+
+    const data: WorkLogWithRelations[] = results.map((r) => ({
+      ...r.workLog,
+      project: r.project,
+      worker: r.worker?.id ? r.worker : null,
+      smetaItem: r.smetaItem?.id ? r.smetaItem : null,
+      loggedBy: r.loggedBy,
+      validatedBy: null,
+    }));
+
+    return { data, total: Number(countResult.count) };
+  }
+
+  async markWorkLogPaid(id: string): Promise<void> {
+    await this.db.update(workLogs).set({ isPaid: true }).where(eq(workLogs.id, id));
+  }
+
   async findUnvalidatedWorkLogs(
     orgId: string,
     params: { page: number; limit: number; projectId?: string },
@@ -345,44 +366,27 @@ export class VendorWorkersRepository {
         workLog: workLogs,
         project: { id: projects.id, name: projects.name },
         loggedBy: { id: users.id, name: users.name },
+        worker: { id: workers.id, name: workers.name },
+        smetaItem: { id: smetaItems.id, name: smetaItems.name },
       })
       .from(workLogs)
       .innerJoin(projects, eq(workLogs.projectId, projects.id))
       .innerJoin(users, eq(workLogs.loggedById, users.id))
+      .leftJoin(workers, eq(workLogs.workerId, workers.id))
+      .leftJoin(smetaItems, eq(workLogs.smetaItemId, smetaItems.id))
       .where(and(...conditions))
       .orderBy(desc(workLogs.date))
       .limit(limit)
       .offset(offset);
 
-    const data: WorkLogWithRelations[] = [];
-    for (const r of results) {
-      let worker: { id: string; name: string } | null = null;
-      if (r.workLog.workerId) {
-        const [workerResult] = await this.db
-          .select({ id: workers.id, name: workers.name })
-          .from(workers)
-          .where(eq(workers.id, r.workLog.workerId));
-        worker = workerResult ?? null;
-      }
-
-      let smetaItem: { id: string; name: string } | null = null;
-      if (r.workLog.smetaItemId) {
-        const [itemResult] = await this.db
-          .select({ id: smetaItems.id, name: smetaItems.name })
-          .from(smetaItems)
-          .where(eq(smetaItems.id, r.workLog.smetaItemId));
-        smetaItem = itemResult ?? null;
-      }
-
-      data.push({
-        ...r.workLog,
-        project: r.project,
-        worker,
-        smetaItem,
-        loggedBy: r.loggedBy,
-        validatedBy: null,
-      });
-    }
+    const data: WorkLogWithRelations[] = results.map((r) => ({
+      ...r.workLog,
+      project: r.project,
+      worker: r.worker?.id ? r.worker : null,
+      smetaItem: r.smetaItem?.id ? r.smetaItem : null,
+      loggedBy: r.loggedBy,
+      validatedBy: null,
+    }));
 
     return { data, total: Number(countResult.count) };
   }

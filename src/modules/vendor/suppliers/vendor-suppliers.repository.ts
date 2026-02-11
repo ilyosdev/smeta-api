@@ -65,21 +65,22 @@ export class VendorSuppliersRepository {
       .where(and(...conditions));
 
     const results = await this.db
-      .select()
+      .select({
+        supplier: suppliers,
+        totalDebt: sql<number>`coalesce(sum(case when ${supplierDebts.isPaid} = false then ${supplierDebts.amount} else 0 end), 0)`,
+      })
       .from(suppliers)
+      .leftJoin(supplierDebts, eq(supplierDebts.supplierId, suppliers.id))
       .where(and(...conditions))
+      .groupBy(suppliers.id)
       .orderBy(desc(suppliers.createdAt))
       .limit(limit)
       .offset(offset);
 
-    const data: SupplierWithDebt[] = [];
-    for (const supplier of results) {
-      const [debtResult] = await this.db
-        .select({ total: sql<number>`coalesce(sum(${supplierDebts.amount}), 0)` })
-        .from(supplierDebts)
-        .where(and(eq(supplierDebts.supplierId, supplier.id), eq(supplierDebts.isPaid, false)));
-      data.push({ ...supplier, totalDebt: Number(debtResult.total) });
-    }
+    const data: SupplierWithDebt[] = results.map((r) => ({
+      ...r.supplier,
+      totalDebt: Number(r.totalDebt),
+    }));
 
     return { data, total: Number(countResult.count) };
   }
@@ -93,7 +94,7 @@ export class VendorSuppliersRepository {
     if (!result) return null;
 
     const [debtResult] = await this.db
-      .select({ total: sql<number>`coalesce(sum(${supplierDebts.amount}), 0)::float` })
+      .select({ total: sql<number>`coalesce(sum(${supplierDebts.amount}), 0)` })
       .from(supplierDebts)
       .where(and(eq(supplierDebts.supplierId, id), eq(supplierDebts.isPaid, false)));
 
@@ -262,6 +263,101 @@ export class VendorSuppliersRepository {
       .where(eq(supplierDebts.id, debtId));
     const [result] = await this.db.select().from(supplierDebts).where(eq(supplierDebts.id, debtId));
     return result;
+  }
+
+  async findSupplierDebtsByFilter(
+    orgId: string,
+    params: { supplierId?: string; isPaid?: boolean; dateFrom?: Date; dateTo?: Date; page: number; limit: number },
+  ): Promise<{ data: SupplierDebtWithRelations[]; total: number }> {
+    const { supplierId, isPaid, dateFrom, dateTo, page, limit } = params;
+    const offset = (page - 1) * limit;
+
+    const conditions: ReturnType<typeof eq>[] = [eq(suppliers.orgId, orgId)];
+    if (supplierId) conditions.push(eq(supplierDebts.supplierId, supplierId));
+    if (isPaid !== undefined) conditions.push(eq(supplierDebts.isPaid, isPaid));
+    if (dateFrom) conditions.push(sql`${supplierDebts.createdAt} >= ${dateFrom}`);
+    if (dateTo) conditions.push(sql`${supplierDebts.createdAt} <= ${dateTo}`);
+
+    const [countResult] = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(supplierDebts)
+      .innerJoin(suppliers, eq(supplierDebts.supplierId, suppliers.id))
+      .where(and(...conditions));
+
+    const results = await this.db
+      .select({
+        debt: supplierDebts,
+        supplier: { id: suppliers.id, name: suppliers.name },
+      })
+      .from(supplierDebts)
+      .innerJoin(suppliers, eq(supplierDebts.supplierId, suppliers.id))
+      .where(and(...conditions))
+      .orderBy(desc(supplierDebts.createdAt))
+      .limit(limit)
+      .offset(offset);
+
+    const data: SupplierDebtWithRelations[] = results.map((r) => ({
+      ...r.debt,
+      supplier: r.supplier,
+    }));
+
+    return { data, total: Number(countResult.count) };
+  }
+
+  async findPaidDebts(
+    orgId: string,
+    params: { projectId?: string; dateFrom?: Date; dateTo?: Date; page: number; limit: number },
+  ): Promise<{ data: SupplierDebtWithRelations[]; total: number }> {
+    const { dateFrom, dateTo, page, limit } = params;
+    const offset = (page - 1) * limit;
+
+    const conditions: ReturnType<typeof eq>[] = [
+      eq(suppliers.orgId, orgId),
+      eq(supplierDebts.isPaid, true),
+    ];
+    if (dateFrom) conditions.push(sql`${supplierDebts.paidAt} >= ${dateFrom}`);
+    if (dateTo) conditions.push(sql`${supplierDebts.paidAt} <= ${dateTo}`);
+
+    const [countResult] = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(supplierDebts)
+      .innerJoin(suppliers, eq(supplierDebts.supplierId, suppliers.id))
+      .where(and(...conditions));
+
+    const results = await this.db
+      .select({
+        debt: supplierDebts,
+        supplier: { id: suppliers.id, name: suppliers.name },
+      })
+      .from(supplierDebts)
+      .innerJoin(suppliers, eq(supplierDebts.supplierId, suppliers.id))
+      .where(and(...conditions))
+      .orderBy(desc(supplierDebts.paidAt))
+      .limit(limit)
+      .offset(offset);
+
+    const data: SupplierDebtWithRelations[] = results.map((r) => ({
+      ...r.debt,
+      supplier: r.supplier,
+    }));
+
+    return { data, total: Number(countResult.count) };
+  }
+
+  async findSupplierByUserId(userId: string, orgId: string): Promise<SupplierWithDebt | null> {
+    const [result] = await this.db
+      .select()
+      .from(suppliers)
+      .where(and(eq(suppliers.userId, userId), eq(suppliers.orgId, orgId)));
+
+    if (!result) return null;
+
+    const [debtResult] = await this.db
+      .select({ total: sql<number>`coalesce(sum(${supplierDebts.amount}), 0)` })
+      .from(supplierDebts)
+      .where(and(eq(supplierDebts.supplierId, result.id), eq(supplierDebts.isPaid, false)));
+
+    return { ...result, totalDebt: Number(debtResult.total) };
   }
 
   async getSupplierOrgId(supplierId: string): Promise<string | null> {

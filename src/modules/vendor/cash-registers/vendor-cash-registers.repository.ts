@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, lte, sql } from 'drizzle-orm';
+import { CashTransactionType } from 'src/common/database/schemas';
 import { randomUUID } from 'crypto';
 
 import { Drizzle, DRIZZLE_ORM } from 'src/common/database/drizzle.module';
@@ -96,25 +97,48 @@ export class VendorCashRegistersRepository {
 
   async findCashTransactions(
     cashRegisterId: string,
-    params: { page: number; limit: number },
+    params: { page: number; limit: number; dateFrom?: Date; dateTo?: Date; type?: CashTransactionType },
   ): Promise<{ data: CashTransaction[]; total: number }> {
-    const { page, limit } = params;
+    const { page, limit, dateFrom, dateTo, type } = params;
     const offset = (page - 1) * limit;
+
+    const conditions = [eq(cashTransactions.cashRegisterId, cashRegisterId)];
+    if (dateFrom) conditions.push(gte(cashTransactions.createdAt, dateFrom));
+    if (dateTo) conditions.push(lte(cashTransactions.createdAt, dateTo));
+    if (type) conditions.push(eq(cashTransactions.type, type));
+
+    const where = and(...conditions);
 
     const [countResult] = await this.db
       .select({ count: sql<number>`count(*)` })
       .from(cashTransactions)
-      .where(eq(cashTransactions.cashRegisterId, cashRegisterId));
+      .where(where);
 
     const data = await this.db
       .select()
       .from(cashTransactions)
-      .where(eq(cashTransactions.cashRegisterId, cashRegisterId))
+      .where(where)
       .orderBy(desc(cashTransactions.createdAt))
       .limit(limit)
       .offset(offset);
 
     return { data, total: Number(countResult.count) };
+  }
+
+  async findCashRegisterByUserId(userId: string): Promise<CashRegisterWithRelations | null> {
+    const results = await this.db
+      .select({
+        cashRegister: cashRegisters,
+        user: { id: users.id, name: users.name },
+      })
+      .from(cashRegisters)
+      .innerJoin(users, eq(cashRegisters.userId, users.id))
+      .where(eq(cashRegisters.userId, userId));
+
+    if (results.length === 0) return null;
+
+    const r = results[0];
+    return { ...r.cashRegister, user: r.user };
   }
 
   async getCashRegisterOrgId(cashRegisterId: string): Promise<string | null> {

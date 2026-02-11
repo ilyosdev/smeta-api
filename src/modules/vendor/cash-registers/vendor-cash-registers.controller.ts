@@ -13,6 +13,7 @@ import {
   PaginatedCashRegisterResponseDto,
   PaginatedCashTransactionResponseDto,
   QueryCashRegisterDto,
+  QueryCashTransactionDto,
   UpdateCashRegisterDto,
 } from './dto';
 import { VendorCashRegistersMapper } from './vendor-cash-registers.mapper';
@@ -46,6 +47,14 @@ export class VendorCashRegistersController {
   ): Promise<PaginatedCashRegisterResponseDto> {
     const result = await this.service.findAllCashRegisters(query, user);
     return this.mapper.mapPaginatedCashRegisters(result);
+  }
+
+  @Get('my')
+  @Endpoint('Get my koshelok', true)
+  @ApiOkResponse({ type: CashRegisterResponseDto })
+  async getMyKoshelok(@User() user: IUser): Promise<CashRegisterResponseDto> {
+    const result = await this.service.getOrCreateUserKoshelok(user);
+    return this.mapper.mapCashRegister(result);
   }
 
   @Get(':id')
@@ -83,11 +92,15 @@ export class VendorCashRegistersController {
   @ApiOkResponse({ type: PaginatedCashTransactionResponseDto })
   async findCashTransactions(
     @Param('id', ParseUUIDPipe) id: string,
-    @Query('page') page: number,
-    @Query('limit') limit: number,
+    @Query() query: QueryCashTransactionDto,
     @User() user: IUser,
   ): Promise<PaginatedCashTransactionResponseDto> {
-    const result = await this.service.findCashTransactions(id, user, page, limit);
+    const filters = {
+      type: query.type,
+      dateFrom: query.dateFrom ? new Date(query.dateFrom) : undefined,
+      dateTo: query.dateTo ? new Date(query.dateTo) : undefined,
+    };
+    const result = await this.service.findCashTransactions(id, user, query.page, query.limit, filters);
     return this.mapper.mapPaginatedCashTransactions(result);
   }
 

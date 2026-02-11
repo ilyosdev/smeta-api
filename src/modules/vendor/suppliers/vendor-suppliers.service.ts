@@ -167,6 +167,28 @@ export class VendorSuppliersService {
     return { ...result, page, limit };
   }
 
+  async findSupplierDebtsByFilter(
+    user: IUser,
+    params: { supplierId?: string; isPaid?: boolean; dateFrom?: Date; dateTo?: Date; page?: number; limit?: number },
+  ): Promise<{ data: SupplierDebtWithRelations[]; total: number; page: number; limit: number }> {
+    const { page = 1, limit = 20, ...rest } = params;
+    const result = await this.repository.findSupplierDebtsByFilter(user.orgId, { ...rest, page, limit });
+    return { ...result, page, limit };
+  }
+
+  async findPaidDebts(
+    user: IUser,
+    params: { projectId?: string; dateFrom?: Date; dateTo?: Date; page?: number; limit?: number },
+  ): Promise<{ data: SupplierDebtWithRelations[]; total: number; page: number; limit: number }> {
+    const { page = 1, limit = 20, ...rest } = params;
+    const result = await this.repository.findPaidDebts(user.orgId, { ...rest, page, limit });
+    return { ...result, page, limit };
+  }
+
+  async findSupplierByUserId(userId: string, user: IUser): Promise<SupplierWithDebt | null> {
+    return this.repository.findSupplierByUserId(userId, user.orgId);
+  }
+
   async paySupplierDebt(debtId: string, user: IUser): Promise<{ success: boolean }> {
     await this.repository.paySupplierDebt(debtId, user.id);
     return { success: true };

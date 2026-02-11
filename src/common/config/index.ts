@@ -29,9 +29,16 @@ export const env = cleanEnv(process.env, {
   TELEGRAM_WEBHOOK_SECRET: str({ default: '' }),
 
   GEMINI_API_KEY: str({ default: '' }),
+  GOOGLE_SERVICE_ACCOUNT_PATH: str({ default: '' }),
+  GCP_PROJECT_ID: str({ default: '' }),
+  GCP_LOCATION: str({ default: 'us-central1' }),
 
   S3_ENDPOINT: str({ default: '' }),
   S3_ACCESS_KEY: str({ default: '' }),
   S3_SECRET_KEY: str({ default: '' }),
   S3_BUCKET: str({ default: 'smetakon' }),
+
+  SUPER_ADMIN_PHONE: str({ default: '+998900000000' }),
+  SUPER_ADMIN_PASSWORD: str({ default: 'admin123' }),
+  SUPER_ADMIN_NAME: str({ default: 'Super Admin' }),
 });

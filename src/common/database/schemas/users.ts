@@ -4,6 +4,8 @@ import { randomUUID } from 'crypto';
 import { organizations } from './organizations';
 
 export enum UserRole {
+  SUPER_ADMIN = 'SUPER_ADMIN',
+  OPERATOR = 'OPERATOR',
   BOSS = 'BOSS',
   DIREKTOR = 'DIREKTOR',
   BUGALTERIYA = 'BUGALTERIYA',
@@ -11,9 +13,13 @@ export enum UserRole {
   SNABJENIYA = 'SNABJENIYA',
   SKLAD = 'SKLAD',
   PRORAB = 'PRORAB',
+  WORKER = 'WORKER',
+  POSTAVSHIK = 'POSTAVSHIK',
 }
 
 export const userRoleEnum = mysqlEnum('role', [
+  UserRole.SUPER_ADMIN,
+  UserRole.OPERATOR,
   UserRole.BOSS,
   UserRole.DIREKTOR,
   UserRole.BUGALTERIYA,
@@ -21,6 +27,8 @@ export const userRoleEnum = mysqlEnum('role', [
   UserRole.SNABJENIYA,
   UserRole.SKLAD,
   UserRole.PRORAB,
+  UserRole.WORKER,
+  UserRole.POSTAVSHIK,
 ]);
 
 export const users = mysqlTable('users', {
@@ -34,6 +42,8 @@ export const users = mysqlTable('users', {
   password: varchar('password', { length: 255 }),
   name: varchar('name', { length: 255 }).notNull(),
   role: mysqlEnum('role', [
+    UserRole.SUPER_ADMIN,
+    UserRole.OPERATOR,
     UserRole.BOSS,
     UserRole.DIREKTOR,
     UserRole.BUGALTERIYA,
@@ -41,6 +51,8 @@ export const users = mysqlTable('users', {
     UserRole.SNABJENIYA,
     UserRole.SKLAD,
     UserRole.PRORAB,
+    UserRole.WORKER,
+    UserRole.POSTAVSHIK,
   ]).default(UserRole.PRORAB).notNull(),
   isActive: boolean('is_active').default(true).notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),

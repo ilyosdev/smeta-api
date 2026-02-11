@@ -95,9 +95,28 @@ export class VendorCashRegistersService {
     user: IUser,
     page = 1,
     limit = 50,
+    filters?: { dateFrom?: Date; dateTo?: Date; type?: CashTransactionType },
   ): Promise<{ data: CashTransaction[]; total: number; page: number; limit: number }> {
     await this.findOneCashRegister(cashRegisterId, user);
-    const result = await this.repository.findCashTransactions(cashRegisterId, { page, limit });
+    const result = await this.repository.findCashTransactions(cashRegisterId, {
+      page,
+      limit,
+      dateFrom: filters?.dateFrom,
+      dateTo: filters?.dateTo,
+      type: filters?.type,
+    });
     return { ...result, page, limit };
+  }
+
+  async getOrCreateUserKoshelok(user: IUser): Promise<CashRegisterWithRelations> {
+    const existing = await this.repository.findCashRegisterByUserId(user.id);
+    if (existing) return existing;
+
+    const cashRegister = await this.repository.createCashRegister({
+      userId: user.id,
+      name: 'Koshelok',
+    });
+
+    return this.findOneCashRegister(cashRegister.id, user);
   }
 }

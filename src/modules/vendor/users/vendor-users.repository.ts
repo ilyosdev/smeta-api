@@ -3,7 +3,7 @@ import { and, desc, eq, like, sql } from 'drizzle-orm';
 import { randomUUID } from 'crypto';
 
 import { Drizzle, DRIZZLE_ORM } from 'src/common/database/drizzle.module';
-import { NewUser, User, UserRole, users } from 'src/common/database/schemas';
+import { NewUser, User, UserRole, users, userProjects } from 'src/common/database/schemas';
 
 @Injectable()
 export class VendorUsersRepository {
@@ -83,5 +83,21 @@ export class VendorUsersRepository {
 
   async delete(id: string, orgId: string): Promise<void> {
     await this.db.delete(users).where(and(eq(users.id, id), eq(users.orgId, orgId)));
+  }
+
+  async findByProjectAndRole(projectId: string, role: UserRole, orgId: string): Promise<User[]> {
+    const data = await this.db
+      .select({ users })
+      .from(users)
+      .innerJoin(userProjects, eq(users.id, userProjects.userId))
+      .where(
+        and(
+          eq(userProjects.projectId, projectId),
+          eq(users.role, role),
+          eq(users.orgId, orgId),
+          eq(users.isActive, true),
+        ),
+      );
+    return data.map((row) => row.users);
   }
 }

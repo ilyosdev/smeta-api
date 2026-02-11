@@ -11,6 +11,8 @@ export const workers = mysqlTable('workers', {
   orgId: varchar('org_id', { length: 36 })
     .references(() => organizations.id, { onDelete: 'cascade' })
     .notNull(),
+  userId: varchar('user_id', { length: 36 })
+    .references(() => users.id, { onDelete: 'set null' }),
   name: varchar('name', { length: 255 }).notNull(),
   phone: varchar('phone', { length: 50 }),
   specialty: varchar('specialty', { length: 255 }),
@@ -42,6 +44,7 @@ export const workLogs = mysqlTable('work_logs', {
   isValidated: boolean('is_validated').default(false).notNull(),
   validatedById: varchar('validated_by_id', { length: 36 }).references(() => users.id),
   validatedAt: timestamp('validated_at'),
+  isPaid: boolean('is_paid').default(false).notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
@@ -62,6 +65,10 @@ export const workersRelations = relations(workers, ({ one, many }) => ({
   organization: one(organizations, {
     fields: [workers.orgId],
     references: [organizations.id],
+  }),
+  user: one(users, {
+    fields: [workers.userId],
+    references: [users.id],
   }),
   workLogs: many(workLogs),
   payments: many(workerPayments),

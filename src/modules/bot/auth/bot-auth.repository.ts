@@ -21,4 +21,18 @@ export class BotAuthRepository {
     });
     return result ?? null;
   }
+
+  async findByPhone(phone: string): Promise<User | null> {
+    const result = await this.db.query.users.findFirst({
+      where: eq(users.phone, phone),
+    });
+    return result ?? null;
+  }
+
+  async updateTelegramId(userId: string, telegramId: string): Promise<void> {
+    await this.db
+      .update(users)
+      .set({ telegramId })
+      .where(eq(users.id, userId));
+  }
 }

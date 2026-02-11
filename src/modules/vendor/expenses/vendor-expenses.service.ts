@@ -25,17 +25,18 @@ export class VendorExpensesService {
       note: dto.note,
       smetaItemId: dto.smetaItemId,
       recordedById: user.id,
+      ...(dto.isPaid !== undefined ? { isPaid: dto.isPaid } : {}),
     });
 
     return this.findOneExpense(expense.id, user);
   }
 
   async findAllExpenses(
-    query: QueryExpenseDto,
+    query: QueryExpenseDto & { isPaid?: boolean },
     user: IUser,
   ): Promise<{ data: ExpenseWithRelations[]; total: number; page: number; limit: number }> {
-    const { page = 1, limit = 20, projectId, category } = query;
-    const result = await this.repository.findAllExpenses(user.orgId, { page, limit, projectId, category });
+    const { page = 1, limit = 20, projectId, category, isPaid } = query;
+    const result = await this.repository.findAllExpenses(user.orgId, { page, limit, projectId, category, isPaid });
     return { ...result, page, limit };
   }
 
@@ -45,6 +46,17 @@ export class VendorExpensesService {
       HandledException.throw('EXPENSE_NOT_FOUND', 404);
     }
     return result;
+  }
+
+  async approveExpense(id: string, user: IUser): Promise<ExpenseWithRelations> {
+    await this.findOneExpense(id, user);
+    await this.repository.updateExpense(id, { isPaid: true, paidAt: new Date() });
+    return this.findOneExpense(id, user);
+  }
+
+  async rejectExpense(id: string, user: IUser): Promise<void> {
+    await this.findOneExpense(id, user);
+    await this.repository.deleteExpense(id);
   }
 
   async removeExpense(id: string, user: IUser): Promise<void> {

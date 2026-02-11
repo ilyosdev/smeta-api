@@ -28,7 +28,12 @@ export class VendorWorkersService {
       name: dto.name,
       phone: dto.phone,
       specialty: dto.specialty,
+      userId: (dto as any).userId,
     });
+  }
+
+  async findWorkerByUserId(userId: string, user: IUser): Promise<Worker | null> {
+    return this.repository.findWorkerByUserId(userId, user.orgId);
   }
 
   async findAllWorkers(
@@ -97,6 +102,16 @@ export class VendorWorkersService {
     projectId?: string,
   ): Promise<{ data: WorkLogWithRelations[]; total: number; page: number; limit: number }> {
     const result = await this.repository.findWorkLogs(user.orgId, { page, limit, workerId, projectId });
+    return { ...result, page, limit };
+  }
+
+  async findUnpaidWorkLogs(
+    user: IUser,
+    page = 1,
+    limit = 20,
+    projectId?: string,
+  ): Promise<{ data: WorkLogWithRelations[]; total: number; page: number; limit: number }> {
+    const result = await this.repository.findWorkLogs(user.orgId, { page, limit, projectId, isPaid: false });
     return { ...result, page, limit };
   }
 
@@ -186,6 +201,22 @@ export class VendorWorkersService {
       HandledException.throw('PAYMENT_NOT_FOUND', 404);
     }
     return result;
+  }
+
+  async findValidatedUnpaidWorkLogs(
+    user: IUser,
+    workerId: string,
+    projectId: string,
+    page = 1,
+    limit = 50,
+  ): Promise<{ data: WorkLogWithRelations[]; total: number; page: number; limit: number }> {
+    const result = await this.repository.findValidatedUnpaidWorkLogs(user.orgId, { workerId, projectId, page, limit });
+    return { ...result, page, limit };
+  }
+
+  async markWorkLogPaid(id: string, user: IUser): Promise<void> {
+    await this.findOneWorkLog(id, user);
+    await this.repository.markWorkLogPaid(id);
   }
 
   async findUnvalidatedWorkLogs(

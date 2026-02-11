@@ -9,6 +9,7 @@ export enum RequestStatus {
   PENDING = 'PENDING',
   APPROVED = 'APPROVED',
   REJECTED = 'REJECTED',
+  FULFILLED = 'FULFILLED',
 }
 
 export const purchaseRequests = mysqlTable('purchase_requests', {
@@ -23,6 +24,7 @@ export const purchaseRequests = mysqlTable('purchase_requests', {
     RequestStatus.PENDING,
     RequestStatus.APPROVED,
     RequestStatus.REJECTED,
+    RequestStatus.FULFILLED,
   ]).default(RequestStatus.PENDING).notNull(),
   requestedById: varchar('requested_by_id', { length: 36 })
     .references(() => users.id)
@@ -34,6 +36,12 @@ export const purchaseRequests = mysqlTable('purchase_requests', {
   isOverrun: boolean('is_overrun').default(false).notNull(),
   overrunQty: double('overrun_qty'),
   overrunPercent: double('overrun_percent'),
+  fulfilledQty: double('fulfilled_qty'),
+  fulfilledAmount: double('fulfilled_amount'),
+  supplierName: varchar('supplier_name', { length: 255 }),
+  proofPhotoFileId: varchar('proof_photo_file_id', { length: 255 }),
+  fulfilledById: varchar('fulfilled_by_id', { length: 36 }).references(() => users.id),
+  fulfilledAt: timestamp('fulfilled_at'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at')
     .defaultNow()
@@ -55,6 +63,11 @@ export const purchaseRequestsRelations = relations(purchaseRequests, ({ one }) =
     fields: [purchaseRequests.approvedById],
     references: [users.id],
     relationName: 'approvedBy',
+  }),
+  fulfilledBy: one(users, {
+    fields: [purchaseRequests.fulfilledById],
+    references: [users.id],
+    relationName: 'fulfilledBy',
   }),
 }));
 

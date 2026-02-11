@@ -18,6 +18,7 @@ export const suppliers = mysqlTable('suppliers', {
   orgId: varchar('org_id', { length: 36 })
     .references(() => organizations.id, { onDelete: 'cascade' })
     .notNull(),
+  userId: varchar('user_id', { length: 36 }).references(() => users.id, { onDelete: 'set null' }),
   name: varchar('name', { length: 255 }).notNull(),
   phone: varchar('phone', { length: 50 }),
   address: varchar('address', { length: 500 }),
@@ -82,6 +83,10 @@ export const suppliersRelations = relations(suppliers, ({ one, many }) => ({
   organization: one(organizations, {
     fields: [suppliers.orgId],
     references: [organizations.id],
+  }),
+  user: one(users, {
+    fields: [suppliers.userId],
+    references: [users.id],
   }),
   orders: many(supplyOrders),
   debts: many(supplierDebts),

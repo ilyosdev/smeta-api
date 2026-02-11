@@ -4,7 +4,7 @@ import { IUser, Roles } from 'src/common/consts/auth';
 import { RequestStatus } from 'src/common/database/schemas';
 import { HandledException } from 'src/common/error/http.error';
 
-import { CreateRequestDto, QueryRequestDto, UpdateRequestDto, RejectRequestDto } from './dto';
+import { CreateRequestDto, QueryRequestDto, UpdateRequestDto, RejectRequestDto, FulfillRequestDto } from './dto';
 import { RequestWithRelations, VendorRequestsRepository } from './vendor-requests.repository';
 
 @Injectable()
@@ -37,11 +37,12 @@ export class VendorRequestsService {
     query: QueryRequestDto,
     user: IUser,
   ): Promise<{ data: RequestWithRelations[]; total: number; page: number; limit: number }> {
-    const { page = 1, limit = 10, status, smetaItemId, projectId } = query;
+    const { page = 1, limit = 10, status, statuses, smetaItemId, projectId } = query;
     const result = await this.repository.findAll(user.orgId, {
       page,
       limit,
       status,
+      statuses,
       smetaItemId,
       projectId,
     });
@@ -84,7 +85,7 @@ export class VendorRequestsService {
       HandledException.throw('CANNOT_APPROVE_NON_PENDING_REQUEST', 400);
     }
 
-    if (![Roles.BOSS, Roles.DIREKTOR, Roles.BUGALTERIYA].includes(user.role)) {
+    if (![Roles.BOSS, Roles.DIREKTOR, Roles.BUGALTERIYA, Roles.SNABJENIYA].includes(user.role)) {
       HandledException.throw('INSUFFICIENT_PERMISSIONS', 403);
     }
 
@@ -113,6 +114,30 @@ export class VendorRequestsService {
       approvedById: user.id,
       approvedAt: new Date(),
       rejectionReason: dto.rejectionReason,
+    });
+
+    return this.findOne(id, user);
+  }
+
+  async fulfill(id: string, dto: FulfillRequestDto, user: IUser): Promise<RequestWithRelations> {
+    const request = await this.findOne(id, user);
+
+    if (request.status !== RequestStatus.PENDING && request.status !== RequestStatus.APPROVED) {
+      HandledException.throw('CANNOT_FULFILL_REQUEST', 400);
+    }
+
+    if (![Roles.SNABJENIYA, Roles.BOSS, Roles.DIREKTOR].includes(user.role)) {
+      HandledException.throw('INSUFFICIENT_PERMISSIONS', 403);
+    }
+
+    await this.repository.update(id, {
+      status: RequestStatus.FULFILLED,
+      fulfilledQty: dto.fulfilledQty,
+      fulfilledAmount: dto.fulfilledAmount,
+      supplierName: dto.supplierName,
+      proofPhotoFileId: dto.proofPhotoFileId,
+      fulfilledById: user.id,
+      fulfilledAt: new Date(),
     });
 
     return this.findOne(id, user);

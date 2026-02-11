@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, sql, or } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/mysql-core';
 import { randomUUID } from 'crypto';
 
 import { Drizzle, DRIZZLE_ORM } from 'src/common/database/drizzle.module';
@@ -30,6 +31,10 @@ export type RequestWithRelations = PurchaseRequest & {
     id: string;
     name: string;
   } | null;
+  fulfilledBy?: {
+    id: string;
+    name: string;
+  } | null;
 };
 
 @Injectable()
@@ -49,16 +54,21 @@ export class VendorRequestsRepository {
       page: number;
       limit: number;
       status?: RequestStatus;
+      statuses?: RequestStatus[];
       smetaItemId?: string;
       projectId?: string;
     },
   ): Promise<{ data: RequestWithRelations[]; total: number }> {
-    const { page, limit, status, smetaItemId, projectId } = params;
+    const { page, limit, status, statuses, smetaItemId, projectId } = params;
     const offset = (page - 1) * limit;
 
+    const fulfilledByUser = alias(users, 'fulfilled_by_user');
+
     const conditions: ReturnType<typeof eq>[] = [];
-    
-    if (status) {
+
+    if (statuses && statuses.length > 0) {
+      conditions.push(or(...statuses.map((s) => eq(purchaseRequests.status, s)))!);
+    } else if (status) {
       conditions.push(eq(purchaseRequests.status, status));
     }
     if (smetaItemId) {
@@ -87,12 +97,17 @@ export class VendorRequestsRepository {
           id: users.id,
           name: users.name,
         },
+        fulfilledBy: {
+          id: fulfilledByUser.id,
+          name: fulfilledByUser.name,
+        },
       })
       .from(purchaseRequests)
       .innerJoin(smetaItems, eq(purchaseRequests.smetaItemId, smetaItems.id))
       .innerJoin(smetas, eq(smetaItems.smetaId, smetas.id))
       .innerJoin(projects, eq(smetas.projectId, projects.id))
       .innerJoin(users, eq(purchaseRequests.requestedById, users.id))
+      .leftJoin(fulfilledByUser, eq(purchaseRequests.fulfilledById, fulfilledByUser.id))
       .where(
         and(
           eq(projects.orgId, orgId),
@@ -127,12 +142,15 @@ export class VendorRequestsRepository {
       smetaItem: r.smetaItem,
       requestedBy: r.requestedBy,
       approvedBy: null,
+      fulfilledBy: r.fulfilledBy?.id ? r.fulfilledBy : null,
     }));
 
     return { data, total: Number(countResult.count) };
   }
 
   async findById(id: string, orgId: string): Promise<RequestWithRelations | null> {
+    const fulfilledByUser = alias(users, 'fulfilled_by_user');
+
     const results = await this.db
       .select({
         request: purchaseRequests,
@@ -151,12 +169,17 @@ export class VendorRequestsRepository {
           id: users.id,
           name: users.name,
         },
+        fulfilledBy: {
+          id: fulfilledByUser.id,
+          name: fulfilledByUser.name,
+        },
       })
       .from(purchaseRequests)
       .innerJoin(smetaItems, eq(purchaseRequests.smetaItemId, smetaItems.id))
       .innerJoin(smetas, eq(smetaItems.smetaId, smetas.id))
       .innerJoin(projects, eq(smetas.projectId, projects.id))
       .innerJoin(users, eq(purchaseRequests.requestedById, users.id))
+      .leftJoin(fulfilledByUser, eq(purchaseRequests.fulfilledById, fulfilledByUser.id))
       .where(and(eq(purchaseRequests.id, id), eq(projects.orgId, orgId)));
 
     if (results.length === 0) {
@@ -169,6 +192,7 @@ export class VendorRequestsRepository {
       smetaItem: r.smetaItem,
       requestedBy: r.requestedBy,
       approvedBy: null,
+      fulfilledBy: r.fulfilledBy?.id ? r.fulfilledBy : null,
     };
   }
 

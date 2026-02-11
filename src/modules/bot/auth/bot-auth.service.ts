@@ -52,6 +52,18 @@ export class BotAuthService {
     return user;
   }
 
+  async findByPhone(phone: string): Promise<User | null> {
+    return this.repository.findByPhone(phone);
+  }
+
+  async findByTelegramId(telegramId: string): Promise<User | null> {
+    return this.repository.findByTelegramId(telegramId);
+  }
+
+  async updateTelegramId(userId: string, telegramId: string): Promise<void> {
+    return this.repository.updateTelegramId(userId, telegramId);
+  }
+
   private async generateTokens(user: User): Promise<{ accessToken: string; refreshToken: string }> {
     const payload = {
       id: user.id,

@@ -19,12 +19,15 @@ import { VendorWarehousesModule } from './modules/vendor/warehouses/vendor-wareh
 import { VendorWorkersModule } from './modules/vendor/workers/vendor-workers.module';
 import { VendorAccountsModule } from './modules/vendor/accounts/vendor-accounts.module';
 import { VendorCashRegistersModule } from './modules/vendor/cash-registers/vendor-cash-registers.module';
+import { VendorCashRequestsModule } from './modules/vendor/cash-requests/vendor-cash-requests.module';
 import { VendorIncomesModule } from './modules/vendor/incomes/vendor-incomes.module';
 import { VendorExpensesModule } from './modules/vendor/expenses/vendor-expenses.module';
 import { VendorManualPurchasesModule } from './modules/vendor/manual-purchases/vendor-manual-purchases.module';
 import { VendorAnalyticsModule } from './modules/vendor/analytics/vendor-analytics.module';
+import { AdminModule } from './modules/admin/admin.module';
 import { BotAuthModule } from './modules/bot/auth/bot-auth.module';
 import { BotTelegramGroupsModule } from './modules/bot/telegram-groups/bot-telegram-groups.module';
+import { TelegramModule } from './modules/bot/telegram/telegram.module';
 
 @Module({
   imports: [
@@ -37,6 +40,7 @@ import { BotTelegramGroupsModule } from './modules/bot/telegram-groups/bot-teleg
         password: env.REDIS_PASSWORD || undefined,
       },
     }),
+    AdminModule,
     VendorAuthModule,
     VendorProjectsModule,
     VendorSmetasModule,
@@ -48,12 +52,14 @@ import { BotTelegramGroupsModule } from './modules/bot/telegram-groups/bot-teleg
     VendorWorkersModule,
     VendorAccountsModule,
     VendorCashRegistersModule,
+    VendorCashRequestsModule,
     VendorIncomesModule,
     VendorExpensesModule,
     VendorManualPurchasesModule,
     VendorAnalyticsModule,
     BotAuthModule,
     BotTelegramGroupsModule,
+    TelegramModule,
   ],
   providers: [
     {
