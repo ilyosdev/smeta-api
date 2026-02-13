@@ -25,6 +25,8 @@ const TEST_USERS = [
   { phone: '+998900000006', name: 'Snabjenets Test', role: schema.UserRole.SNABJENIYA, orgId: TEST_ORG_ID },
   { phone: '+998900000007', name: 'Skladchi Test', role: schema.UserRole.SKLAD, orgId: TEST_ORG_ID },
   { phone: '+998900000008', name: 'Prorab Test', role: schema.UserRole.PRORAB, orgId: TEST_ORG_ID },
+  { phone: '+998900000009', name: 'Haydovchi Test', role: schema.UserRole.HAYDOVCHI, orgId: TEST_ORG_ID },
+  { phone: '+998900000010', name: 'Moderator Test', role: schema.UserRole.MODERATOR, orgId: TEST_ORG_ID },
 ];
 
 async function seed() {

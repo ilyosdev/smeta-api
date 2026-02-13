@@ -146,13 +146,19 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           // Restore auth from DB
           const user = await this.authService.findByTelegramId(String(ctx.from.id));
           if (user && user.isActive) {
-            ctx.session.userId = user.id;
-            ctx.session.orgId = user.orgId;
-            ctx.session.userName = user.name;
-            ctx.session.phone = user.phone ?? undefined;
-            // Don't overwrite tester's chosen role
             const isTester = TESTER_IDS.includes(String(ctx.from.id));
-            if (!isTester || !ctx.session.testerRoleConfirmed) {
+
+            // Don't overwrite tester's switched user data
+            if (isTester && ctx.session.testerRoleConfirmed) {
+              // Tester has switched roles - keep their switched userId/role
+              // Only restore orgId (stays the same)
+              ctx.session.orgId = user.orgId;
+            } else {
+              // Normal user or tester who hasn't switched yet
+              ctx.session.userId = user.id;
+              ctx.session.orgId = user.orgId;
+              ctx.session.userName = user.name;
+              ctx.session.phone = user.phone ?? undefined;
               ctx.session.role = user.role as UserRole;
             }
 
@@ -315,6 +321,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       try { await ctx.answerCallbackQuery(); } catch {}
       await this.bossMenu.handleDebts(ctx);
     });
+    this.bot.callbackQuery('boss:debts_prev', async (ctx) => {
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.bossMenu.handleDebtsPrev(ctx);
+    });
+    this.bot.callbackQuery('boss:debts_next', async (ctx) => {
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.bossMenu.handleDebtsNext(ctx);
+    });
     this.bot.callbackQuery('boss:warehouse', async (ctx) => {
       try { await ctx.answerCallbackQuery(); } catch {}
       await this.bossMenu.handleWarehouse(ctx);
@@ -322,6 +336,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     this.bot.callbackQuery('boss:pending', async (ctx) => {
       try { await ctx.answerCallbackQuery(); } catch {}
       await this.bossMenu.handlePending(ctx);
+    });
+    this.bot.callbackQuery('boss:pending_prev', async (ctx) => {
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.bossMenu.handlePendingPrev(ctx);
+    });
+    this.bot.callbackQuery('boss:pending_next', async (ctx) => {
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.bossMenu.handlePendingNext(ctx);
     });
     this.bot.callbackQuery(/^boss:ar:/, async (ctx) => {
       const id = ctx.callbackQuery.data.split(':')[2];
@@ -519,10 +541,43 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       try { await ctx.answerCallbackQuery(); } catch {}
       await this.supplyMenu.handleRequests(ctx);
     });
+    this.bot.callbackQuery('supply:req_prev', async (ctx) => {
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.supplyMenu.handleRequestPrev(ctx);
+    });
+    this.bot.callbackQuery('supply:req_next', async (ctx) => {
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.supplyMenu.handleRequestNext(ctx);
+    });
+    this.bot.callbackQuery(/^supply:edit:/, async (ctx) => {
+      const requestId = ctx.callbackQuery.data.split(':')[2];
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.supplyMenu.handleEditRequest(ctx, requestId);
+    });
+    this.bot.callbackQuery(/^supply:reject:/, async (ctx) => {
+      const requestId = ctx.callbackQuery.data.split(':')[2];
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.supplyMenu.handleRejectRequest(ctx, requestId);
+    });
     this.bot.callbackQuery(/^supply:approve:/, async (ctx) => {
       const requestId = ctx.callbackQuery.data.split(':')[2];
       try { await ctx.answerCallbackQuery(); } catch {}
       await this.supplyMenu.handleApproveRequest(ctx, requestId);
+    });
+    this.bot.callbackQuery(/^supply:editbatch:/, async (ctx) => {
+      const firstRequestId = ctx.callbackQuery.data.split(':')[2];
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.supplyMenu.handleEditBatch(ctx, firstRequestId);
+    });
+    this.bot.callbackQuery(/^supply:appbatch:/, async (ctx) => {
+      const firstRequestId = ctx.callbackQuery.data.split(':')[2];
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.supplyMenu.handleApproveBatch(ctx, firstRequestId);
+    });
+    this.bot.callbackQuery(/^supply:rejbatch:/, async (ctx) => {
+      const firstRequestId = ctx.callbackQuery.data.split(':')[2];
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.supplyMenu.handleRejectBatch(ctx, firstRequestId);
     });
     this.bot.callbackQuery('supply:new_order', async (ctx) => {
       try { await ctx.answerCallbackQuery(); } catch {}
@@ -531,6 +586,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     this.bot.callbackQuery('supply:orders', async (ctx) => {
       try { await ctx.answerCallbackQuery(); } catch {}
       await this.supplyMenu.handleOrders(ctx);
+    });
+    this.bot.callbackQuery('supply:order_prev', async (ctx) => {
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.supplyMenu.handleOrderPrev(ctx);
+    });
+    this.bot.callbackQuery('supply:order_next', async (ctx) => {
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.supplyMenu.handleOrderNext(ctx);
     });
     this.bot.callbackQuery('supply:debt_menu', async (ctx) => {
       try { await ctx.answerCallbackQuery(); } catch {}
@@ -560,6 +623,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const lastMonth = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
       await this.supplyMenu.handlePaymentsFiltered(ctx, lastMonth, now);
     });
+    this.bot.callbackQuery('supply:payment_prev', async (ctx) => {
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.supplyMenu.handlePaymentPrev(ctx);
+    });
+    this.bot.callbackQuery('supply:payment_next', async (ctx) => {
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.supplyMenu.handlePaymentNext(ctx);
+    });
 
     // Warehouse menu callbacks
     this.bot.callbackQuery('wh:add', async (ctx) => {
@@ -582,6 +653,22 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       try { await ctx.answerCallbackQuery(); } catch {}
       await this.warehouseMenu.handlePendingDeliveries(ctx);
     });
+    this.bot.callbackQuery('wh:pending_prev', async (ctx) => {
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.warehouseMenu.handlePendingPrev(ctx);
+    });
+    this.bot.callbackQuery('wh:pending_next', async (ctx) => {
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.warehouseMenu.handlePendingNext(ctx);
+    });
+    this.bot.callbackQuery('wh:inventory_prev', async (ctx) => {
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.warehouseMenu.handleInventoryPrev(ctx);
+    });
+    this.bot.callbackQuery('wh:inventory_next', async (ctx) => {
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.warehouseMenu.handleInventoryNext(ctx);
+    });
     this.bot.callbackQuery(/^wh:receive:/, async (ctx) => {
       const requestId = ctx.callbackQuery.data.split(':')[2];
       try { await ctx.answerCallbackQuery(); } catch {}
@@ -590,26 +677,61 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     // Driver menu callbacks
     this.bot.callbackQuery('driver:assigned', async (ctx) => {
+      this.logger.log(`[driver:assigned] callback received, session userId=${ctx.session?.userId}`);
       try { await ctx.answerCallbackQuery(); } catch {}
       await this.driverMenu.handleAssignedRequests(ctx);
+    });
+    this.bot.callbackQuery('driver:assigned_prev', async (ctx) => {
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.driverMenu.handleAssignedPrev(ctx);
+    });
+    this.bot.callbackQuery('driver:assigned_next', async (ctx) => {
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.driverMenu.handleAssignedNext(ctx);
     });
     this.bot.callbackQuery('driver:active', async (ctx) => {
       try { await ctx.answerCallbackQuery(); } catch {}
       await this.driverMenu.handleActiveDeliveries(ctx);
     });
+    this.bot.callbackQuery('driver:active_prev', async (ctx) => {
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.driverMenu.handleActivePrev(ctx);
+    });
+    this.bot.callbackQuery('driver:active_next', async (ctx) => {
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.driverMenu.handleActiveNext(ctx);
+    });
     this.bot.callbackQuery('driver:history', async (ctx) => {
       try { await ctx.answerCallbackQuery(); } catch {}
       await this.driverMenu.handleDeliveryHistory(ctx);
+    });
+    this.bot.callbackQuery('driver:history_prev', async (ctx) => {
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.driverMenu.handleHistoryPrev(ctx);
+    });
+    this.bot.callbackQuery('driver:history_next', async (ctx) => {
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.driverMenu.handleHistoryNext(ctx);
     });
     this.bot.callbackQuery(/^driver:collect:/, async (ctx) => {
       const requestId = ctx.callbackQuery.data.split(':')[2];
       try { await ctx.answerCallbackQuery(); } catch {}
       await this.driverMenu.handleCollect(ctx, requestId);
     });
+    this.bot.callbackQuery(/^driver:collectbatch:/, async (ctx) => {
+      const firstRequestId = ctx.callbackQuery.data.split(':')[2];
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.driverMenu.handleCollectBatch(ctx, firstRequestId);
+    });
     this.bot.callbackQuery(/^driver:deliver:/, async (ctx) => {
       const requestId = ctx.callbackQuery.data.split(':')[2];
       try { await ctx.answerCallbackQuery(); } catch {}
       await this.driverMenu.handleDeliver(ctx, requestId);
+    });
+    this.bot.callbackQuery(/^driver:deliverbatch:/, async (ctx) => {
+      const firstRequestId = ctx.callbackQuery.data.split(':')[2];
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.driverMenu.handleDeliverBatch(ctx, firstRequestId);
     });
 
     // Moderator menu callbacks
@@ -636,10 +758,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       try { await ctx.answerCallbackQuery(); } catch {}
       await this.foremanMenu.handleRequest(ctx);
     });
-    this.bot.callbackQuery(/^foreman:req_hist:/, async (ctx) => {
-      const page = parseInt(ctx.callbackQuery.data.split(':')[2], 10) || 1;
+    this.bot.callbackQuery('foreman:req_hist_prev', async (ctx) => {
       try { await ctx.answerCallbackQuery(); } catch {}
-      await this.foremanMenu.handleRequestHistory(ctx, page);
+      await this.foremanMenu.handleReqHistPrev(ctx);
+    });
+    this.bot.callbackQuery('foreman:req_hist_next', async (ctx) => {
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.foremanMenu.handleReqHistNext(ctx);
     });
     this.bot.callbackQuery('foreman:request_history', async (ctx) => {
       try { await ctx.answerCallbackQuery(); } catch {}

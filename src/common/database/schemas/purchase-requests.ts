@@ -17,6 +17,8 @@ export enum RequestStatus {
 
 export const purchaseRequests = mysqlTable('purchase_requests', {
   id: varchar('id', { length: 36 }).primaryKey().$defaultFn(() => randomUUID()),
+  // Batch ID to group requests created together by Prorab
+  batchId: varchar('batch_id', { length: 36 }),
   smetaItemId: varchar('smeta_item_id', { length: 36 })
     .references(() => smetaItems.id, { onDelete: 'cascade' })
     .notNull(),

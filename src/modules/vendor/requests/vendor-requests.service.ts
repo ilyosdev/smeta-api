@@ -30,6 +30,7 @@ export class VendorRequestsService {
     }
 
     const request = await this.repository.create({
+      batchId: dto.batchId,
       smetaItemId: dto.smetaItemId,
       requestedQty: dto.requestedQty,
       requestedAmount: dto.requestedAmount,
@@ -116,7 +117,7 @@ export class VendorRequestsService {
       HandledException.throw('CANNOT_REJECT_NON_PENDING_REQUEST', 400);
     }
 
-    if (![Roles.BOSS, Roles.DIREKTOR, Roles.BUGALTERIYA].includes(user.role)) {
+    if (![Roles.BOSS, Roles.DIREKTOR, Roles.BUGALTERIYA, Roles.SNABJENIYA].includes(user.role)) {
       HandledException.throw('INSUFFICIENT_PERMISSIONS', 403);
     }
 

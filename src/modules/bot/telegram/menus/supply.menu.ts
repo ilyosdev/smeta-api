@@ -37,6 +37,10 @@ export class SupplyMenu {
       createConversation(this.buildPayDebtConversation(), 'supply_pay_debt'),
       createConversation(this.buildDebtHistoryConversation(), 'supply_debt_history'),
       createConversation(this.buildApproveRequestConversation(), 'supply_approve_request'),
+      createConversation(this.buildEditRequestConversation(), 'supply_edit_request'),
+      createConversation(this.buildRejectRequestConversation(), 'supply_reject_request'),
+      createConversation(this.buildApproveBatchConversation(), 'supply_approve_batch'),
+      createConversation(this.buildRejectBatchConversation(), 'supply_reject_batch'),
     ];
   }
 
@@ -80,7 +84,7 @@ export class SupplyMenu {
     await ctx.conversation.enter('supply_order');
   }
 
-  async handleRequests(ctx: BotContext): Promise<void> {
+  async handleRequests(ctx: BotContext, index?: number): Promise<void> {
     try {
       if (!ctx.session?.userId) {
         await ctx.reply('Avval tizimga kiring: /start');
@@ -91,42 +95,105 @@ export class SupplyMenu {
 
       // Fetch pending requests from Prorab
       const result = await this.requestsService.findAll(
-        { projectId, status: RequestStatus.PENDING, page: 1, limit: 20 },
+        { projectId, status: RequestStatus.PENDING, page: 1, limit: 100 },
         user,
       );
 
+      if (result.data.length === 0) {
+        const text = `📋 <b>ZAYAVKALAR (Prorablardan)</b>\n🏗️ ${escapeHtml(ctx.session?.selectedProjectName || '')}\n\nZayavkalar yo'q.`;
+        const keyboard = new InlineKeyboard().text('🔙 Menyu', 'supply:orders_menu');
+
+        if (ctx.callbackQuery) {
+          await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
+        } else {
+          await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
+        }
+        return;
+      }
+
+      // Group requests by batchId (null batchId = individual request)
+      type RequestBatch = { batchId: string | null; requests: typeof result.data; prorabName: string };
+      const batchMap = new Map<string, RequestBatch>();
+
+      for (const req of result.data) {
+        const key = req.batchId || `single_${req.id}`;
+        if (!batchMap.has(key)) {
+          batchMap.set(key, {
+            batchId: req.batchId || null,
+            requests: [],
+            prorabName: req.requestedBy?.name || 'Noma\'lum',
+          });
+        }
+        batchMap.get(key)!.requests.push(req);
+      }
+
+      const batches = Array.from(batchMap.values());
+
+      // Cache batch keys for navigation
+      ctx.session.supplyPendingRequestIds = batches.map((b) => b.requests[0].id);
+
+      // Determine current batch index
+      const currentIndex = index ?? ctx.session.supplyRequestIndex ?? 0;
+      const safeIndex = Math.max(0, Math.min(currentIndex, batches.length - 1));
+      ctx.session.supplyRequestIndex = safeIndex;
+
+      const batch = batches[safeIndex];
+      const totalBatches = batches.length;
+
+      // Build batch view
       let text = `📋 <b>ZAYAVKALAR (Prorablardan)</b>\n🏗️ ${escapeHtml(ctx.session?.selectedProjectName || '')}\n\n`;
 
-      if (result.data.length === 0) {
-        text += `Zayavkalar yo'q.`;
-      } else {
-        for (let i = 0; i < result.data.length; i++) {
-          const req = result.data[i];
-          const statusIcon = req.status === 'PENDING' ? '🟡' : req.status === 'APPROVED' ? '✅' : '❌';
-          text += `${statusIcon} <b>${escapeHtml(req.smetaItem?.name || 'Noma\'lum')}</b>\n`;
-          text += `   📦 Miqdor: ${req.requestedQty} ${req.smetaItem?.unit || ''}\n`;
-          if (req.requestedBy?.name) {
-            text += `   👷 ${escapeHtml(req.requestedBy.name)}\n`;
-          }
-          if (req.note) {
-            text += `   📝 ${escapeHtml(req.note)}\n`;
-          }
-          text += `   📅 ${new Date(req.createdAt).toLocaleDateString('uz-UZ')}\n\n`;
+      // Show Prorab name once at top
+      text += `👷 <b>${escapeHtml(batch.prorabName)}</b>\n`;
+      text += `📅 ${new Date(batch.requests[0].createdAt).toLocaleDateString('uz-UZ')}\n\n`;
+
+      // List all items in this batch
+      for (let i = 0; i < batch.requests.length; i++) {
+        const req = batch.requests[i];
+        text += `🟡 <b>${escapeHtml(req.smetaItem?.name || 'Noma\'lum')}</b>\n`;
+        text += `   📦 Miqdor: ${req.requestedQty} ${req.smetaItem?.unit || ''}\n`;
+        if (req.note) {
+          text += `   📝 ${escapeHtml(req.note)}\n`;
         }
-        if (result.total > 20) {
-          text += `... jami ${result.total} ta zayavka`;
-        }
+        if (i < batch.requests.length - 1) text += '\n';
       }
 
-      const keyboard = new InlineKeyboard();
-      // Add approve buttons for each pending request
-      for (const req of result.data.slice(0, 10)) {
-        keyboard.text(
-          `✅ ${(req.smetaItem?.name || 'Noma\'lum').slice(0, 20)}`,
-          `supply:approve:${req.id}`,
-        ).row();
+      if (batch.requests.length > 1) {
+        text += `\n<b>Jami: ${batch.requests.length} ta zayavka</b>`;
       }
-      keyboard.text('🔙 Menyu', 'main_menu');
+
+      // Build navigation keyboard
+      const keyboard = new InlineKeyboard();
+
+      // Navigation row (between batches)
+      if (totalBatches > 1) {
+        keyboard.text('◀️ Oldingi', 'supply:req_prev');
+        keyboard.text(`${safeIndex + 1}/${totalBatches}`, 'noop');
+        keyboard.text('Keyingi ▶️', 'supply:req_next');
+        keyboard.row();
+      }
+
+      // For single item batch - show edit/approve/reject on one row
+      if (batch.requests.length === 1) {
+        const req = batch.requests[0];
+        keyboard.text('✏️ Tahrirlash', `supply:edit:${req.id}`);
+        keyboard.text('✅ Tasdiqlash', `supply:approve:${req.id}`);
+        keyboard.row();
+        keyboard.text('❌ Rad etish', `supply:reject:${req.id}`);
+        keyboard.row();
+      } else {
+        // For multi-item batch - use first request ID to lookup batch
+        const firstReqId = batch.requests[0].id;
+        keyboard.text('✏️ Tahrirlash', `supply:editbatch:${firstReqId}`);
+        keyboard.row();
+        keyboard.text('✅ Barchasini tasdiqlash', `supply:appbatch:${firstReqId}`);
+        keyboard.row();
+        keyboard.text('❌ Barchasini rad etish', `supply:rejbatch:${firstReqId}`);
+        keyboard.row();
+      }
+
+      // Back to menu
+      keyboard.text('🔙 Menyu', 'supply:orders_menu');
 
       if (ctx.callbackQuery) {
         await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
@@ -137,6 +204,130 @@ export class SupplyMenu {
       this.logger.error('Requests list error', error);
       await ctx.reply('Zayavkalarni yuklashda xatolik yuz berdi.');
     }
+  }
+
+  /**
+   * Navigate to previous request
+   */
+  async handleRequestPrev(ctx: BotContext): Promise<void> {
+    const currentIndex = ctx.session?.supplyRequestIndex ?? 0;
+    const total = ctx.session?.supplyPendingRequestIds?.length ?? 0;
+    const newIndex = currentIndex > 0 ? currentIndex - 1 : total - 1;
+    await this.handleRequests(ctx, newIndex);
+  }
+
+  /**
+   * Navigate to next request
+   */
+  async handleRequestNext(ctx: BotContext): Promise<void> {
+    const currentIndex = ctx.session?.supplyRequestIndex ?? 0;
+    const total = ctx.session?.supplyPendingRequestIds?.length ?? 0;
+    const newIndex = currentIndex < total - 1 ? currentIndex + 1 : 0;
+    await this.handleRequests(ctx, newIndex);
+  }
+
+  /**
+   * Start edit request conversation
+   */
+  async handleEditRequest(ctx: BotContext, requestId: string): Promise<void> {
+    if (!ctx.session) {
+      await ctx.reply('Avval tizimga kiring: /start');
+      return;
+    }
+    ctx.session.pendingEditRequestId = requestId;
+    await ctx.conversation.enter('supply_edit_request');
+  }
+
+  /**
+   * Start reject request conversation
+   */
+  async handleRejectRequest(ctx: BotContext, requestId: string): Promise<void> {
+    if (!ctx.session) {
+      await ctx.reply('Avval tizimga kiring: /start');
+      return;
+    }
+    ctx.session.pendingRejectRequestId = requestId;
+    await ctx.conversation.enter('supply_reject_request');
+  }
+
+  /**
+   * Show batch items for editing - user selects which one to edit
+   */
+  async handleEditBatch(ctx: BotContext, firstRequestId: string): Promise<void> {
+    try {
+      if (!ctx.session?.userId) {
+        await ctx.reply('Avval tizimga kiring: /start');
+        return;
+      }
+      const user = sessionToUser(ctx.session, ctx.from!.id);
+      const projectId = ctx.session?.selectedProjectId;
+
+      // Get first request to find batchId
+      const firstReq = await this.requestsService.findOne(firstRequestId, user);
+      if (!firstReq || !firstReq.batchId) {
+        await ctx.reply('Zayavka topilmadi. ❌');
+        return;
+      }
+
+      // Fetch all pending requests with same batchId
+      const allPending = await this.requestsService.findAll(
+        { projectId, status: RequestStatus.PENDING, page: 1, limit: 100 },
+        user,
+      );
+      const batchRequests = allPending.data.filter((r) => r.batchId === firstReq.batchId);
+
+      if (batchRequests.length === 0) {
+        await ctx.reply('Zayavkalar topilmadi. ❌');
+        return;
+      }
+
+      let text = `✏️ <b>TAHRIRLASH</b>\n\n`;
+      text += `👷 ${escapeHtml(batchRequests[0].requestedBy?.name || '')}\n\n`;
+      text += `Qaysi zayavkani tahrirlaysiz?`;
+
+      const keyboard = new InlineKeyboard();
+      for (const req of batchRequests) {
+        keyboard.text(
+          `${req.smetaItem?.name || 'Noma\'lum'} (${req.requestedQty})`,
+          `supply:edit:${req.id}`,
+        ).row();
+      }
+      keyboard.text('🔙 Orqaga', 'supply:requests');
+
+      if (ctx.callbackQuery) {
+        await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
+      } else {
+        await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
+      }
+    } catch (error) {
+      this.logger.error('Edit batch error', error);
+      await ctx.reply('Xatolik yuz berdi.');
+    }
+  }
+
+  /**
+   * Start batch approve conversation (for multiple requests)
+   */
+  async handleApproveBatch(ctx: BotContext, firstRequestId: string): Promise<void> {
+    if (!ctx.session) {
+      await ctx.reply('Avval tizimga kiring: /start');
+      return;
+    }
+    // Store first request ID - will lookup batch in conversation
+    ctx.session.pendingApproveBatchIds = firstRequestId;
+    await ctx.conversation.enter('supply_approve_batch');
+  }
+
+  /**
+   * Start batch reject conversation (for multiple requests)
+   */
+  async handleRejectBatch(ctx: BotContext, firstRequestId: string): Promise<void> {
+    if (!ctx.session) {
+      await ctx.reply('Avval tizimga kiring: /start');
+      return;
+    }
+    ctx.session.pendingRejectBatchIds = firstRequestId;
+    await ctx.conversation.enter('supply_reject_batch');
   }
 
   /**
@@ -151,7 +342,7 @@ export class SupplyMenu {
     await ctx.conversation.enter('supply_approve_request');
   }
 
-  async handleOrders(ctx: BotContext): Promise<void> {
+  async handleOrders(ctx: BotContext, index?: number): Promise<void> {
     try {
       if (!ctx.session?.userId) {
         await ctx.reply('Avval tizimga kiring: /start');
@@ -162,40 +353,64 @@ export class SupplyMenu {
 
       // Fetch orders for current project
       const result = await this.suppliersService.findAllSupplyOrders(
-        { projectId, page: 1, limit: 20 },
+        { projectId, page: 1, limit: 100 },
         user,
       );
 
-      let text = `📋 <b>BUYURTMALAR</b>\n🏗️ ${escapeHtml(ctx.session?.selectedProjectName || '')}\n\n`;
+      // Cache IDs for navigation
+      ctx.session.supplyOrderIds = result.data.map((o) => o.id);
+
+      let text = `📋 <b>BUYURTMALAR TARIXI</b>\n🏗️ ${escapeHtml(ctx.session?.selectedProjectName || '')}\n\n`;
 
       if (result.data.length === 0) {
         text += `Buyurtmalar yo'q.`;
-      } else {
-        for (const order of result.data) {
-          const statusIcon = order.status === 'ORDERED' ? '🟡' : order.status === 'DELIVERED' ? '✅' : order.status === 'PARTIAL' ? '🟠' : '❌';
-          text += `${statusIcon} <b>${escapeHtml(order.supplier?.name || 'Noma\'lum')}</b>\n`;
-          if (order.items && order.items.length > 0) {
-            for (const item of order.items) {
-              text += `   • ${escapeHtml(item.name)} - ${item.quantity} ${item.unit}`;
-              if (item.unitPrice > 0) {
-                text += ` (${formatMoneyFull(item.totalCost)})`;
-              }
-              text += '\n';
-            }
-          }
-          if (order.note) {
-            text += `   📝 ${escapeHtml(order.note)}\n`;
-          }
-          text += `   📅 ${new Date(order.createdAt).toLocaleDateString('uz-UZ')}\n\n`;
+        const keyboard = new InlineKeyboard()
+          .text('📦 Yangi buyurtma', 'supply:new_order').row()
+          .text('🔙 Menyu', 'supply:orders_menu');
+        if (ctx.callbackQuery) {
+          await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
+        } else {
+          await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
         }
-        if (result.total > 20) {
-          text += `... jami ${result.total} ta buyurtma`;
-        }
+        return;
       }
 
-      const keyboard = new InlineKeyboard()
-        .text('📦 Yangi buyurtma', 'supply:new_order').row()
-        .text('🔙 Menyu', 'main_menu');
+      // Determine current index
+      const currentIndex = index ?? ctx.session.supplyOrderIndex ?? 0;
+      const safeIndex = Math.max(0, Math.min(currentIndex, result.data.length - 1));
+      ctx.session.supplyOrderIndex = safeIndex;
+
+      const order = result.data[safeIndex];
+      const total = result.data.length;
+      const statusIcon = order.status === 'ORDERED' ? '🟡' : order.status === 'DELIVERED' ? '✅' : order.status === 'PARTIAL' ? '🟠' : '❌';
+
+      text += `${statusIcon} <b>${escapeHtml(order.supplier?.name || 'Noma\'lum')}</b>\n`;
+      if (order.items && order.items.length > 0) {
+        for (const item of order.items) {
+          text += `   • ${escapeHtml(item.name)} - ${item.quantity} ${item.unit}`;
+          if (item.unitPrice > 0) {
+            text += ` (${formatMoneyFull(item.totalCost)})`;
+          }
+          text += '\n';
+        }
+      }
+      if (order.note) {
+        text += `   📝 ${escapeHtml(order.note)}\n`;
+      }
+      text += `   📅 ${new Date(order.createdAt).toLocaleDateString('uz-UZ')}\n`;
+
+      const keyboard = new InlineKeyboard();
+
+      // Navigation row (only if more than 1 item)
+      if (total > 1) {
+        keyboard.text('◀️ Oldingi', 'supply:order_prev');
+        keyboard.text(`${safeIndex + 1}/${total}`, 'noop');
+        keyboard.text('Keyingi ▶️', 'supply:order_next');
+        keyboard.row();
+      }
+
+      keyboard.text('📦 Yangi buyurtma', 'supply:new_order').row();
+      keyboard.text('🔙 Menyu', 'supply:orders_menu');
 
       if (ctx.callbackQuery) {
         await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
@@ -206,6 +421,20 @@ export class SupplyMenu {
       this.logger.error('Orders list error', error);
       await ctx.reply('Buyurtmalarni yuklashda xatolik yuz berdi.');
     }
+  }
+
+  async handleOrderPrev(ctx: BotContext): Promise<void> {
+    const currentIndex = ctx.session?.supplyOrderIndex ?? 0;
+    const total = ctx.session?.supplyOrderIds?.length ?? 0;
+    const newIndex = currentIndex > 0 ? currentIndex - 1 : total - 1;
+    await this.handleOrders(ctx, newIndex);
+  }
+
+  async handleOrderNext(ctx: BotContext): Promise<void> {
+    const currentIndex = ctx.session?.supplyOrderIndex ?? 0;
+    const total = ctx.session?.supplyOrderIds?.length ?? 0;
+    const newIndex = currentIndex < total - 1 ? currentIndex + 1 : 0;
+    await this.handleOrders(ctx, newIndex);
   }
 
   async handlePayDebt(ctx: BotContext): Promise<void> {
@@ -238,36 +467,60 @@ export class SupplyMenu {
     }
   }
 
-  async handlePaymentsFiltered(ctx: BotContext, dateFrom: Date, dateTo: Date): Promise<void> {
+  async handlePaymentsFiltered(ctx: BotContext, dateFrom: Date, dateTo: Date, index?: number): Promise<void> {
     try {
       if (!ctx.session?.userId) { await ctx.reply('Avval tizimga kiring: /start'); return; }
       const user = sessionToUser(ctx.session, ctx.from!.id);
 
-      const result = await this.suppliersService.findPaidDebts(user, { dateFrom, dateTo, page: 1, limit: 20 });
+      const result = await this.suppliersService.findPaidDebts(user, { dateFrom, dateTo, page: 1, limit: 100 });
+
+      // Cache IDs for navigation
+      ctx.session.supplyPaymentIds = result.data.map((d) => d.id);
 
       let text = `\u{1F4B8} <b>BERILGAN PULLAR</b>\n\u{1F3D7}\u{FE0F} ${ctx.session?.selectedProjectName}\n\n`;
 
       if (result.data.length === 0) {
         text += `Bu davrda to'lovlar yo'q.`;
-      } else {
-        let total = 0;
-        for (const d of result.data) {
-          text += `\u{1F4B5} <b>${formatMoneyFull(d.amount)}</b>`;
-          if (d.supplier?.name) text += ` \u{2014} ${escapeHtml(d.supplier.name)}`;
-          if (d.reason) text += `\n  ${escapeHtml(d.reason)}`;
-          if (d.paidAt) text += `\n  \u{1F4C5} ${new Date(d.paidAt).toLocaleDateString('uz-UZ')}`;
-          text += `\n\n`;
-          total += d.amount;
+        const keyboard = new InlineKeyboard()
+          .text('\u{1F519} Orqaga', 'supply:payments').row()
+          .text('\u{1F519} Menyu', 'main_menu');
+        if (ctx.callbackQuery) {
+          await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
+        } else {
+          await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
         }
-        text += `\u{1F4B0} <b>Jami:</b> ${formatMoneyFull(total)}`;
-        if (result.total > 20) {
-          text += `\n... jami ${result.total} ta`;
-        }
+        return;
       }
 
-      const keyboard = new InlineKeyboard()
-        .text('\u{1F519} Orqaga', 'supply:payments').row()
-        .text('\u{1F519} Menyu', 'main_menu');
+      // Determine current index
+      const currentIndex = index ?? ctx.session.supplyPaymentIndex ?? 0;
+      const safeIndex = Math.max(0, Math.min(currentIndex, result.data.length - 1));
+      ctx.session.supplyPaymentIndex = safeIndex;
+
+      const d = result.data[safeIndex];
+      const total = result.data.length;
+
+      // Calculate total for all payments
+      const totalAmount = result.data.reduce((sum, p) => sum + p.amount, 0);
+
+      text += `\u{1F4B5} <b>${formatMoneyFull(d.amount)}</b>`;
+      if (d.supplier?.name) text += ` \u{2014} ${escapeHtml(d.supplier.name)}`;
+      if (d.reason) text += `\n   📝 ${escapeHtml(d.reason)}`;
+      if (d.paidAt) text += `\n   \u{1F4C5} ${new Date(d.paidAt).toLocaleDateString('uz-UZ')}`;
+      text += `\n\n\u{1F4B0} <b>Jami davr:</b> ${formatMoneyFull(totalAmount)}`;
+
+      const keyboard = new InlineKeyboard();
+
+      // Navigation row (only if more than 1 item)
+      if (total > 1) {
+        keyboard.text('◀️ Oldingi', 'supply:payment_prev');
+        keyboard.text(`${safeIndex + 1}/${total}`, 'noop');
+        keyboard.text('Keyingi ▶️', 'supply:payment_next');
+        keyboard.row();
+      }
+
+      keyboard.text('\u{1F519} Orqaga', 'supply:payments').row();
+      keyboard.text('\u{1F519} Menyu', 'main_menu');
 
       if (ctx.callbackQuery) {
         await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
@@ -278,6 +531,31 @@ export class SupplyMenu {
       this.logger.error('Payments filtered error', error);
       await ctx.reply('Ma\'lumotlarni yuklashda xatolik yuz berdi.');
     }
+  }
+
+  // Store date range for payment navigation
+  private paymentDateRange: { from: Date; to: Date } | null = null;
+
+  async handlePaymentPrev(ctx: BotContext): Promise<void> {
+    const currentIndex = ctx.session?.supplyPaymentIndex ?? 0;
+    const total = ctx.session?.supplyPaymentIds?.length ?? 0;
+    const newIndex = currentIndex > 0 ? currentIndex - 1 : total - 1;
+    // Default to last month if no range stored
+    const now = new Date();
+    const from = this.paymentDateRange?.from ?? new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const to = this.paymentDateRange?.to ?? now;
+    await this.handlePaymentsFiltered(ctx, from, to, newIndex);
+  }
+
+  async handlePaymentNext(ctx: BotContext): Promise<void> {
+    const currentIndex = ctx.session?.supplyPaymentIndex ?? 0;
+    const total = ctx.session?.supplyPaymentIds?.length ?? 0;
+    const newIndex = currentIndex < total - 1 ? currentIndex + 1 : 0;
+    // Default to last month if no range stored
+    const now = new Date();
+    const from = this.paymentDateRange?.from ?? new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const to = this.paymentDateRange?.to ?? now;
+    await this.handlePaymentsFiltered(ctx, from, to, newIndex);
   }
 
   // --- Conversation builders ---
@@ -639,15 +917,8 @@ export class SupplyMenu {
         await ctx.reply('Iltimos, to\'g\'ri raqam kiriting (masalan: 500 yoki 500,000):');
       }
 
-      // Get price (narx)
-      await ctx.reply('Narxni kiriting (jami summa):\n\n<i>/cancel - bekor qilish</i>', { parse_mode: 'HTML' });
-      let approvedAmount: number;
-      for (;;) {
-        const raw = await textWithCancel(conversation, ctx);
-        approvedAmount = parseNumber(raw);
-        if (!isNaN(approvedAmount) && approvedAmount >= 0) break;
-        await ctx.reply('Iltimos, to\'g\'ri raqam kiriting (masalan: 5000000 yoki 5,000,000):');
-      }
+      // Note: Price (narx) is set by MODERATOR later, not by SNABJENIYA
+      const approvedAmount = 0; // Will be filled by moderator
 
       // Get available drivers
       const drivers = await conversation.external(() =>
@@ -679,7 +950,7 @@ export class SupplyMenu {
       let summary = `📋 <b>TASDIQLASH</b>\n\n`;
       summary += `📦 ${escapeHtml(request.smetaItem?.name || '')}\n`;
       summary += `📊 Tasdiqlangan miqdor: ${approvedQty} ${request.smetaItem?.unit || ''}\n`;
-      summary += `💰 Narx: ${formatMoneyFull(approvedAmount)}\n`;
+      summary += `💰 Narx: Moderator belgilaydi\n`;
       summary += `🚚 Haydovchi: ${escapeHtml(selectedDriver?.name || '')}\n`;
 
       await ctx.reply(summary, {
@@ -713,6 +984,351 @@ export class SupplyMenu {
         console.error('[supplyApproveRequest] error:', err?.message || err);
         await ctx.reply('Tasdiqlashda xatolik yuz berdi. ❌');
       }
+    };
+  }
+
+  private buildEditRequestConversation() {
+    const requestsService = this.requestsService;
+
+    return async function supplyEditRequest(
+      conversation: BotConversation,
+      ctx: BotContext,
+    ) {
+      const requestId = await conversation.external((ctx) => ctx.session?.pendingEditRequestId);
+      if (!requestId) {
+        await ctx.reply('Zayavka topilmadi. Qaytadan urinib ko\'ring.');
+        return;
+      }
+
+      const user = await conversation.external((ctx) =>
+        sessionToUser(ctx.session, ctx.from!.id),
+      );
+
+      // Fetch the request
+      const request = await conversation.external(() =>
+        requestsService.findOne(requestId, user),
+      );
+
+      if (!request) {
+        await ctx.reply('Zayavka topilmadi. ❌');
+        return;
+      }
+
+      if (request.status !== RequestStatus.PENDING) {
+        await ctx.reply('Bu zayavka allaqachon tasdiqlangan yoki bekor qilingan. ❌');
+        return;
+      }
+
+      // Show current details and ask for new quantity
+      await ctx.reply(
+        `✏️ <b>ZAYAVKANI TAHRIRLASH</b>\n\n` +
+        `📦 ${escapeHtml(request.smetaItem?.name || 'Noma\'lum')}\n` +
+        `📊 Hozirgi miqdor: ${request.requestedQty} ${request.smetaItem?.unit || ''}\n` +
+        `👷 Prorab: ${escapeHtml(request.requestedBy?.name || '')}\n\n` +
+        `Yangi miqdorni kiriting:\n\n<i>/cancel - bekor qilish</i>`,
+        { parse_mode: 'HTML' },
+      );
+
+      // Get new quantity
+      let newQty: number;
+      for (;;) {
+        const raw = await textWithCancel(conversation, ctx);
+        newQty = parseNumber(raw);
+        if (!isNaN(newQty) && newQty > 0) break;
+        await ctx.reply('Iltimos, to\'g\'ri raqam kiriting (masalan: 500 yoki 500,000):');
+      }
+
+      // Show confirmation
+      let summary = `📋 <b>TAHRIRLASH TASDIQLANSIN?</b>\n\n`;
+      summary += `📦 ${escapeHtml(request.smetaItem?.name || '')}\n`;
+      summary += `📊 Eski miqdor: ${request.requestedQty} ${request.smetaItem?.unit || ''}\n`;
+      summary += `📊 Yangi miqdor: ${newQty} ${request.smetaItem?.unit || ''}\n`;
+
+      await ctx.reply(summary, {
+        parse_mode: 'HTML',
+        reply_markup: buildConfirmationKeyboard('supedit', { withEdit: false }),
+      });
+
+      const confirmCtx = await waitForCallbackOrCancel(conversation, ctx, /^supedit:(confirm|cancel)/, {
+        otherwise: (ctx) => ctx.reply('Iltimos, tasdiqlang yoki bekor qiling.'),
+      });
+      try { await confirmCtx.answerCallbackQuery(); } catch {}
+
+      if (confirmCtx.callbackQuery!.data === 'supedit:cancel') {
+        await ctx.reply('Bekor qilindi. ❌');
+        return;
+      }
+
+      try {
+        await conversation.external(() =>
+          requestsService.update(requestId, { requestedQty: newQty }, user),
+        );
+        await ctx.reply('Zayavka tahrirlandi! ✅');
+      } catch (err: any) {
+        console.error('[supplyEditRequest] error:', err?.message || err);
+        await ctx.reply('Tahrirlashda xatolik yuz berdi. ❌');
+      }
+    };
+  }
+
+  private buildRejectRequestConversation() {
+    const requestsService = this.requestsService;
+
+    return async function supplyRejectRequest(
+      conversation: BotConversation,
+      ctx: BotContext,
+    ) {
+      const requestId = await conversation.external((ctx) => ctx.session?.pendingRejectRequestId);
+      if (!requestId) {
+        await ctx.reply('Zayavka topilmadi. Qaytadan urinib ko\'ring.');
+        return;
+      }
+
+      const user = await conversation.external((ctx) =>
+        sessionToUser(ctx.session, ctx.from!.id),
+      );
+
+      // Fetch the request
+      const request = await conversation.external(() =>
+        requestsService.findOne(requestId, user),
+      );
+
+      if (!request) {
+        await ctx.reply('Zayavka topilmadi. ❌');
+        return;
+      }
+
+      if (request.status !== RequestStatus.PENDING) {
+        await ctx.reply('Bu zayavka allaqachon tasdiqlangan yoki bekor qilingan. ❌');
+        return;
+      }
+
+      // Show request details and ask for rejection reason
+      await ctx.reply(
+        `❌ <b>ZAYAVKANI RAD ETISH</b>\n\n` +
+        `📦 ${escapeHtml(request.smetaItem?.name || 'Noma\'lum')}\n` +
+        `📊 Miqdor: ${request.requestedQty} ${request.smetaItem?.unit || ''}\n` +
+        `👷 Prorab: ${escapeHtml(request.requestedBy?.name || '')}\n\n` +
+        `Rad etish sababini kiriting:\n\n<i>/cancel - bekor qilish</i>`,
+        { parse_mode: 'HTML' },
+      );
+
+      // Get rejection reason
+      const reason = await textWithCancel(conversation, ctx);
+
+      // Show confirmation
+      let summary = `📋 <b>RAD ETISH TASDIQLANSIN?</b>\n\n`;
+      summary += `📦 ${escapeHtml(request.smetaItem?.name || '')}\n`;
+      summary += `📊 Miqdor: ${request.requestedQty} ${request.smetaItem?.unit || ''}\n`;
+      summary += `❌ Sabab: ${escapeHtml(reason)}\n`;
+
+      await ctx.reply(summary, {
+        parse_mode: 'HTML',
+        reply_markup: buildConfirmationKeyboard('suprej', { withEdit: false }),
+      });
+
+      const confirmCtx = await waitForCallbackOrCancel(conversation, ctx, /^suprej:(confirm|cancel)/, {
+        otherwise: (ctx) => ctx.reply('Iltimos, tasdiqlang yoki bekor qiling.'),
+      });
+      try { await confirmCtx.answerCallbackQuery(); } catch {}
+
+      if (confirmCtx.callbackQuery!.data === 'suprej:cancel') {
+        await ctx.reply('Bekor qilindi. ❌');
+        return;
+      }
+
+      try {
+        await conversation.external(() =>
+          requestsService.reject(requestId, { rejectionReason: reason }, user),
+        );
+        await ctx.reply('Zayavka rad etildi! ✅');
+      } catch (err: any) {
+        console.error('[supplyRejectRequest] error:', err?.message || err);
+        await ctx.reply('Rad etishda xatolik yuz berdi. ❌');
+      }
+    };
+  }
+
+  private buildApproveBatchConversation() {
+    const requestsService = this.requestsService;
+
+    return async function supplyApproveBatch(
+      conversation: BotConversation,
+      ctx: BotContext,
+    ) {
+      const firstRequestId = await conversation.external((ctx) => ctx.session?.pendingApproveBatchIds);
+      if (!firstRequestId) {
+        await ctx.reply('Zayavkalar topilmadi. Qaytadan urinib ko\'ring.');
+        return;
+      }
+
+      const user = await conversation.external((ctx) =>
+        sessionToUser(ctx.session, ctx.from!.id),
+      );
+
+      // Get first request to find batchId
+      const firstReq = await conversation.external(() => requestsService.findOne(firstRequestId, user));
+      if (!firstReq || !firstReq.batchId) {
+        await ctx.reply('Zayavka topilmadi. ❌');
+        return;
+      }
+
+      // Fetch all pending requests with same batchId
+      const projectId = await conversation.external((ctx) => ctx.session?.selectedProjectId);
+      const allPending = await conversation.external(() =>
+        requestsService.findAll({ projectId, status: RequestStatus.PENDING, page: 1, limit: 100 }, user),
+      );
+
+      const requests = allPending.data.filter((r: any) => r.batchId === firstReq.batchId);
+
+      if (requests.length === 0) {
+        await ctx.reply('Zayavkalar topilmadi yoki allaqachon tasdiqlangan. ❌');
+        return;
+      }
+
+      // Show batch summary
+      let summary = `✅ <b>BARCHASI TASDIQLANSIN</b>\n\n`;
+      summary += `👷 <b>${escapeHtml(requests[0].requestedBy?.name || '')}</b>\n\n`;
+      for (const req of requests) {
+        summary += `📦 ${escapeHtml(req.smetaItem?.name || 'Noma\'lum')} — ${req.requestedQty} ${req.smetaItem?.unit || ''}\n`;
+      }
+      summary += `\n<b>Jami: ${requests.length} ta zayavka</b>\n\n`;
+      summary += `Haydovchini tanlang:`;
+
+      // Get available drivers
+      const drivers = await conversation.external(() =>
+        requestsService.getAvailableDrivers(user),
+      );
+
+      if (drivers.length === 0) {
+        await ctx.reply('Haydovchilar topilmadi. Avval haydovchi qo\'shing. ❌');
+        return;
+      }
+
+      const driverKb = new InlineKeyboard();
+      for (const driver of drivers.slice(0, 10)) {
+        driverKb.text(`🚚 ${driver.name}`, `seldrv:${driver.id}`).row();
+      }
+      driverKb.text('❌ Bekor qilish', 'conv:cancel');
+
+      await ctx.reply(summary, { parse_mode: 'HTML', reply_markup: driverKb });
+
+      const driverCtx = await waitForCallbackOrCancel(conversation, ctx, /^seldrv:/, {
+        otherwise: (ctx) => ctx.reply('Iltimos, haydovchini tanlang.'),
+      });
+      try { await driverCtx.answerCallbackQuery(); } catch {}
+      const driverId = driverCtx.callbackQuery!.data!.split(':')[1];
+      const selectedDriver = drivers.find((d) => d.id === driverId);
+
+      // Approve all requests with same driver
+      let successCount = 0;
+      for (const req of requests) {
+        try {
+          await conversation.external(() =>
+            requestsService.approveAndAssign(req.id, {
+              approvedQty: req.requestedQty,
+              approvedAmount: 0, // Moderator sets price later
+              driverId,
+            }, user),
+          );
+          successCount++;
+        } catch (err: any) {
+          console.error(`[supplyApproveBatch] Error approving ${req.id}:`, err?.message || err);
+        }
+      }
+
+      await ctx.reply(
+        `${successCount} ta zayavka tasdiqlandi! ✅\n\n` +
+        `🚚 ${escapeHtml(selectedDriver?.name || '')} ga tayinlandi.`,
+      );
+    };
+  }
+
+  private buildRejectBatchConversation() {
+    const requestsService = this.requestsService;
+
+    return async function supplyRejectBatch(
+      conversation: BotConversation,
+      ctx: BotContext,
+    ) {
+      const firstRequestId = await conversation.external((ctx) => ctx.session?.pendingRejectBatchIds);
+      if (!firstRequestId) {
+        await ctx.reply('Zayavkalar topilmadi. Qaytadan urinib ko\'ring.');
+        return;
+      }
+
+      const user = await conversation.external((ctx) =>
+        sessionToUser(ctx.session, ctx.from!.id),
+      );
+
+      // Get first request to find batchId
+      const firstReq = await conversation.external(() => requestsService.findOne(firstRequestId, user));
+      if (!firstReq || !firstReq.batchId) {
+        await ctx.reply('Zayavka topilmadi. ❌');
+        return;
+      }
+
+      // Fetch all pending requests with same batchId
+      const projectId = await conversation.external((ctx) => ctx.session?.selectedProjectId);
+      const allPending = await conversation.external(() =>
+        requestsService.findAll({ projectId, status: RequestStatus.PENDING, page: 1, limit: 100 }, user),
+      );
+
+      const requests = allPending.data.filter((r: any) => r.batchId === firstReq.batchId);
+
+      if (requests.length === 0) {
+        await ctx.reply('Zayavkalar topilmadi yoki allaqachon bekor qilingan. ❌');
+        return;
+      }
+
+      // Show batch summary
+      let summary = `❌ <b>BARCHASI RAD ETILSIN</b>\n\n`;
+      summary += `👷 <b>${escapeHtml(requests[0].requestedBy?.name || '')}</b>\n\n`;
+      for (const req of requests) {
+        summary += `📦 ${escapeHtml(req.smetaItem?.name || 'Noma\'lum')} — ${req.requestedQty} ${req.smetaItem?.unit || ''}\n`;
+      }
+      summary += `\n<b>Jami: ${requests.length} ta zayavka</b>\n\n`;
+      summary += `Rad etish sababini kiriting:\n\n<i>/cancel - bekor qilish</i>`;
+
+      await ctx.reply(summary, { parse_mode: 'HTML' });
+
+      const reason = await textWithCancel(conversation, ctx);
+
+      // Confirmation
+      await ctx.reply(
+        `📋 <b>RAD ETISH TASDIQLANSIN?</b>\n\n` +
+        `${requests.length} ta zayavka rad etiladi.\n` +
+        `❌ Sabab: ${escapeHtml(reason)}`,
+        {
+          parse_mode: 'HTML',
+          reply_markup: buildConfirmationKeyboard('suprejbatch', { withEdit: false }),
+        },
+      );
+
+      const confirmCtx = await waitForCallbackOrCancel(conversation, ctx, /^suprejbatch:(confirm|cancel)/, {
+        otherwise: (ctx) => ctx.reply('Iltimos, tasdiqlang yoki bekor qiling.'),
+      });
+      try { await confirmCtx.answerCallbackQuery(); } catch {}
+
+      if (confirmCtx.callbackQuery!.data === 'suprejbatch:cancel') {
+        await ctx.reply('Bekor qilindi. ❌');
+        return;
+      }
+
+      // Reject all requests
+      let successCount = 0;
+      for (const req of requests) {
+        try {
+          await conversation.external(() =>
+            requestsService.reject(req.id, { rejectionReason: reason }, user),
+          );
+          successCount++;
+        } catch (err: any) {
+          console.error(`[supplyRejectBatch] Error rejecting ${req.id}:`, err?.message || err);
+        }
+      }
+
+      await ctx.reply(`${successCount} ta zayavka rad etildi! ✅`);
     };
   }
 }

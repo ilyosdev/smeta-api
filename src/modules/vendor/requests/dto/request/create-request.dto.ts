@@ -4,6 +4,11 @@ import { IsBoolean, IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString, IsUUID, 
 import { DataSource } from 'src/common/database/schemas';
 
 export class CreateRequestDto {
+  @ApiPropertyOptional({ description: 'Batch ID to group multiple requests', example: '550e8400-e29b-41d4-a716-446655440000' })
+  @IsUUID()
+  @IsOptional()
+  batchId?: string;
+
   @ApiProperty({ description: 'Smeta item ID', example: '550e8400-e29b-41d4-a716-446655440000' })
   @IsUUID()
   @IsNotEmpty()

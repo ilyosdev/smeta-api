@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InlineKeyboard } from 'grammy';
 import { createConversation } from '@grammyjs/conversations';
+import { randomUUID } from 'crypto';
 
 import { VendorWorkersService } from 'src/modules/vendor/workers/vendor-workers.service';
 import { VendorRequestsService } from 'src/modules/vendor/requests/vendor-requests.service';
@@ -69,42 +70,65 @@ export class ForemanMenu {
     await ctx.conversation.enter('foreman_request');
   }
 
-  async handleRequestHistory(ctx: BotContext, page = 1): Promise<void> {
+  async handleRequestHistory(ctx: BotContext, index?: number): Promise<void> {
     try {
       if (!ctx.session?.userId) { await ctx.reply('Avval tizimga kiring: /start'); return; }
       const user = sessionToUser(ctx.session, ctx.from!.id);
       const projectId = ctx.session?.selectedProjectId;
 
-      const requests = await this.requestsService.findAll({ projectId, page, limit: 10 }, user);
+      const requests = await this.requestsService.findAll({ projectId, page: 1, limit: 100 }, user);
+
+      // Cache IDs for navigation
+      ctx.session.foremanReqHistIds = requests.data.map((r) => r.id);
 
       let text = `\u{1F4CB} <b>ZAYAVKA TARIXI</b>\n\u{1F3D7}\u{FE0F} ${ctx.session?.selectedProjectName}\n\n`;
 
       if (requests.data.length === 0) {
         text += `Zayavkalar topilmadi.`;
-      } else {
-        for (const req of requests.data) {
-          const statusEmoji = req.status === 'PENDING' ? '\u{23F3}'
-            : req.status === 'APPROVED' ? '\u{2705}'
-            : req.status === 'REJECTED' ? '\u{274C}'
-            : '\u{1F4E6}';
-          const name = req.note || req.smetaItem?.name || 'Nomsiz';
-          text += `${statusEmoji} <b>${escapeHtml(name)}</b>\n`;
-          if (req.requestedQty) text += `  Miqdor: ${req.requestedQty}`;
-          if (req.smetaItem?.unit) text += ` ${escapeHtml(req.smetaItem.unit)}`;
-          text += `\n`;
-          text += `  \u{1F4C5} ${new Date(req.createdAt).toLocaleDateString('uz-UZ')}\n\n`;
+        const keyboard = new InlineKeyboard().text('\u{1F519} Orqaga', 'foreman:request_menu');
+        if (ctx.callbackQuery) {
+          await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
+        } else {
+          await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
         }
+        return;
       }
 
+      // Determine current index
+      const currentIndex = index ?? ctx.session.foremanReqHistIndex ?? 0;
+      const safeIndex = Math.max(0, Math.min(currentIndex, requests.data.length - 1));
+      ctx.session.foremanReqHistIndex = safeIndex;
+
+      const req = requests.data[safeIndex];
+      const total = requests.data.length;
+
+      const statusEmoji = req.status === 'PENDING' ? '\u{23F3}'
+        : req.status === 'APPROVED' ? '\u{2705}'
+        : req.status === 'REJECTED' ? '\u{274C}'
+        : '\u{1F4E6}';
+      const statusText = req.status === 'PENDING' ? 'Kutilmoqda'
+        : req.status === 'APPROVED' ? 'Tasdiqlangan'
+        : req.status === 'REJECTED' ? 'Rad etilgan'
+        : req.status;
+      const name = req.note || req.smetaItem?.name || 'Nomsiz';
+
+      text += `${statusEmoji} <b>${escapeHtml(name)}</b>\n`;
+      text += `   📊 Status: ${statusText}\n`;
+      if (req.requestedQty) text += `   📦 Miqdor: ${req.requestedQty}`;
+      if (req.smetaItem?.unit) text += ` ${escapeHtml(req.smetaItem.unit)}`;
+      text += `\n`;
+      text += `   \u{1F4C5} ${new Date(req.createdAt).toLocaleDateString('uz-UZ')}\n`;
+
       const keyboard = new InlineKeyboard();
-      // Pagination
-      const totalPages = Math.ceil(requests.total / 10);
-      if (totalPages > 1) {
-        if (page > 1) keyboard.text('\u{2B05}\u{FE0F}', `foreman:req_hist:${page - 1}`);
-        keyboard.text(`${page}/${totalPages}`, 'noop');
-        if (page < totalPages) keyboard.text('\u{27A1}\u{FE0F}', `foreman:req_hist:${page + 1}`);
+
+      // Navigation row (only if more than 1 item)
+      if (total > 1) {
+        keyboard.text('◀️ Oldingi', 'foreman:req_hist_prev');
+        keyboard.text(`${safeIndex + 1}/${total}`, 'noop');
+        keyboard.text('Keyingi ▶️', 'foreman:req_hist_next');
         keyboard.row();
       }
+
       keyboard.text('\u{1F519} Orqaga', 'foreman:request_menu');
 
       if (ctx.callbackQuery) {
@@ -116,6 +140,20 @@ export class ForemanMenu {
       this.logger.error('Request history error', error);
       await ctx.reply('Ma\'lumotlarni yuklashda xatolik yuz berdi.');
     }
+  }
+
+  async handleReqHistPrev(ctx: BotContext): Promise<void> {
+    const currentIndex = ctx.session?.foremanReqHistIndex ?? 0;
+    const total = ctx.session?.foremanReqHistIds?.length ?? 0;
+    const newIndex = currentIndex > 0 ? currentIndex - 1 : total - 1;
+    await this.handleRequestHistory(ctx, newIndex);
+  }
+
+  async handleReqHistNext(ctx: BotContext): Promise<void> {
+    const currentIndex = ctx.session?.foremanReqHistIndex ?? 0;
+    const total = ctx.session?.foremanReqHistIds?.length ?? 0;
+    const newIndex = currentIndex < total - 1 ? currentIndex + 1 : 0;
+    await this.handleRequestHistory(ctx, newIndex);
   }
 
   async handleWorkers(ctx: BotContext): Promise<void> {
@@ -797,7 +835,8 @@ export class ForemanMenu {
           }
 
           if (action === 'req:confirm_all') {
-            // Save all requests
+            // Save all requests with same batchId if multiple items
+            const batchId = extractedItems.length > 1 ? randomUUID() : undefined;
             let savedCount = 0;
             for (const item of extractedItems) {
               // Find or create smeta item
@@ -840,6 +879,7 @@ export class ForemanMenu {
                 await conversation.external(() =>
                   requestsService.create(
                     {
+                      batchId,
                       smetaItemId: matched!.id,
                       requestedQty: item.requestedQty,
                       requestedAmount: 0,

@@ -59,9 +59,9 @@ export class WarehouseMenu {
   }
 
   /**
-   * Show pending deliveries (DELIVERED status waiting for warehouse receipt)
+   * Show pending deliveries (DELIVERED status waiting for warehouse receipt) - one-by-one carousel
    */
-  async handlePendingDeliveries(ctx: BotContext): Promise<void> {
+  async handlePendingDeliveries(ctx: BotContext, index?: number): Promise<void> {
     try {
       if (!ctx.session?.userId) {
         await ctx.reply('Avval tizimga kiring: /start');
@@ -72,30 +72,50 @@ export class WarehouseMenu {
 
       const result = await this.requestsService.findPendingReceipt(projectId, user);
 
+      // Cache IDs for navigation
+      ctx.session.whPendingIds = result.data.map((r) => r.id);
+
       let text = `🚚 <b>KUTILAYOTGAN YETKAZMALAR</b>\n`;
       text += `🏗️ ${escapeHtml(ctx.session?.selectedProjectName || '')}\n\n`;
 
       if (result.data.length === 0) {
         text += `Hozircha kutilayotgan yetkazmalar yo'q.`;
-      } else {
-        for (const req of result.data) {
-          text += `📦 <b>${escapeHtml(req.smetaItem?.name || 'Noma\'lum')}</b>\n`;
-          text += `   📊 Yetkazilgan: ${req.deliveredQty} ${req.smetaItem?.unit || ''}\n`;
-          text += `   💰 Summa: ${formatMoneyFull(req.approvedAmount || req.requestedAmount)}\n`;
-          if (req.deliveredAt) {
-            text += `   🕐 ${new Date(req.deliveredAt).toLocaleString('uz-UZ')}\n`;
-          }
-          text += '\n';
+        const keyboard = new InlineKeyboard().text('🔙 Menyu', 'main_menu');
+        if (ctx.callbackQuery) {
+          await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
+        } else {
+          await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
         }
+        return;
+      }
+
+      // Determine current index
+      const currentIndex = index ?? ctx.session.whPendingIndex ?? 0;
+      const safeIndex = Math.max(0, Math.min(currentIndex, result.data.length - 1));
+      ctx.session.whPendingIndex = safeIndex;
+
+      const req = result.data[safeIndex];
+      const total = result.data.length;
+
+      text += `📦 <b>${escapeHtml(req.smetaItem?.name || 'Noma\'lum')}</b>\n`;
+      text += `   📊 Yetkazilgan: ${req.deliveredQty} ${req.smetaItem?.unit || ''}\n`;
+      text += `   💰 Summa: ${formatMoneyFull(req.approvedAmount || req.requestedAmount)}\n`;
+      if (req.deliveredAt) {
+        text += `   🕐 ${new Date(req.deliveredAt).toLocaleString('uz-UZ')}\n`;
       }
 
       const keyboard = new InlineKeyboard();
-      for (const req of result.data.slice(0, 10)) {
-        keyboard.text(
-          `📦 ${(req.smetaItem?.name || 'Noma\'lum').slice(0, 20)}`,
-          `wh:receive:${req.id}`,
-        ).row();
+
+      // Navigation row (only if more than 1 item)
+      if (total > 1) {
+        keyboard.text('◀️ Oldingi', 'wh:pending_prev');
+        keyboard.text(`${safeIndex + 1}/${total}`, 'noop');
+        keyboard.text('Keyingi ▶️', 'wh:pending_next');
+        keyboard.row();
       }
+
+      // Action button
+      keyboard.text('✅ Qabul qilish', `wh:receive:${req.id}`).row();
       keyboard.text('🔙 Menyu', 'main_menu');
 
       if (ctx.callbackQuery) {
@@ -107,6 +127,20 @@ export class WarehouseMenu {
       this.logger.error('Pending deliveries error', error);
       await ctx.reply('Yetkazmalarni yuklashda xatolik yuz berdi.');
     }
+  }
+
+  async handlePendingPrev(ctx: BotContext): Promise<void> {
+    const currentIndex = ctx.session?.whPendingIndex ?? 0;
+    const total = ctx.session?.whPendingIds?.length ?? 0;
+    const newIndex = currentIndex > 0 ? currentIndex - 1 : total - 1;
+    await this.handlePendingDeliveries(ctx, newIndex);
+  }
+
+  async handlePendingNext(ctx: BotContext): Promise<void> {
+    const currentIndex = ctx.session?.whPendingIndex ?? 0;
+    const total = ctx.session?.whPendingIds?.length ?? 0;
+    const newIndex = currentIndex < total - 1 ? currentIndex + 1 : 0;
+    await this.handlePendingDeliveries(ctx, newIndex);
   }
 
   /**
@@ -121,7 +155,7 @@ export class WarehouseMenu {
     await ctx.conversation.enter('wh_receive_delivery');
   }
 
-  async handleInventory(ctx: BotContext): Promise<void> {
+  async handleInventory(ctx: BotContext, index?: number): Promise<void> {
     try {
       if (!ctx.session?.userId) { await ctx.reply('Avval tizimga kiring: /start'); return; }
       const user = sessionToUser(ctx.session, ctx.from!.id);
@@ -130,35 +164,72 @@ export class WarehouseMenu {
         user,
       );
 
-      let text = `📋 <b>OMBOR</b>\n`;
+      let text = `📋 <b>OMBOR MATERIALLARI</b>\n`;
       text += `🏗️ ${ctx.session?.selectedProjectName}\n\n`;
 
       if (warehouses.data.length === 0) {
         text += `Omborlar topilmadi.`;
-      } else {
-        for (const wh of warehouses.data) {
-          text += `🏬 <b>${escapeHtml(wh.name)}</b>`;
-          if (wh.location) text += ` (${escapeHtml(wh.location)})`;
-          text += `\n`;
+        const keyboard = new InlineKeyboard()
+          .text('➕ Mahsulot qo\'shish', 'wh:add').row()
+          .text('🔙 Menyu', 'main_menu');
+        if (ctx.callbackQuery) {
+          await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
+        } else {
+          await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
+        }
+        return;
+      }
 
-          const items = await this.warehousesService.findWarehouseItems(wh.id, user, 1, 20);
-          if (items.data.length === 0) {
-            text += `  <i>Bo'sh</i>\n`;
-          } else {
-            for (const item of items.data) {
-              text += `  • ${escapeHtml(item.name)}: ${item.quantity} ${escapeHtml(item.unit)}\n`;
-            }
-            if (items.total > 20) {
-              text += `  ... va yana ${items.total - 20} ta\n`;
-            }
-          }
-          text += `\n`;
+      // Collect all items from all warehouses
+      type ItemWithWarehouse = { item: any; warehouseName: string };
+      const allItems: ItemWithWarehouse[] = [];
+      for (const wh of warehouses.data) {
+        const items = await this.warehousesService.findWarehouseItems(wh.id, user, 1, 100);
+        for (const item of items.data) {
+          allItems.push({ item, warehouseName: wh.name });
         }
       }
 
-      const keyboard = new InlineKeyboard()
-        .text('➕ Mahsulot qo\'shish', 'wh:add').row()
-        .text('🔙 Menyu', 'main_menu');
+      // Cache IDs for navigation
+      ctx.session.whInventoryIds = allItems.map((i) => i.item.id);
+
+      if (allItems.length === 0) {
+        text += `Mahsulotlar yo'q.`;
+        const keyboard = new InlineKeyboard()
+          .text('➕ Mahsulot qo\'shish', 'wh:add').row()
+          .text('🔙 Menyu', 'main_menu');
+        if (ctx.callbackQuery) {
+          await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
+        } else {
+          await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
+        }
+        return;
+      }
+
+      // Determine current index
+      const currentIndex = index ?? ctx.session.whInventoryIndex ?? 0;
+      const safeIndex = Math.max(0, Math.min(currentIndex, allItems.length - 1));
+      ctx.session.whInventoryIndex = safeIndex;
+
+      const { item, warehouseName } = allItems[safeIndex];
+      const total = allItems.length;
+
+      text += `🏬 <b>${escapeHtml(warehouseName)}</b>\n\n`;
+      text += `📦 <b>${escapeHtml(item.name)}</b>\n`;
+      text += `   📊 Miqdor: ${item.quantity} ${escapeHtml(item.unit)}\n`;
+
+      const keyboard = new InlineKeyboard();
+
+      // Navigation row (only if more than 1 item)
+      if (total > 1) {
+        keyboard.text('◀️ Oldingi', 'wh:inventory_prev');
+        keyboard.text(`${safeIndex + 1}/${total}`, 'noop');
+        keyboard.text('Keyingi ▶️', 'wh:inventory_next');
+        keyboard.row();
+      }
+
+      keyboard.text('➕ Mahsulot qo\'shish', 'wh:add').row();
+      keyboard.text('🔙 Menyu', 'main_menu');
 
       if (ctx.callbackQuery) {
         await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
@@ -169,6 +240,20 @@ export class WarehouseMenu {
       this.logger.error('Inventory error', error);
       await ctx.reply('Ombor ma\'lumotlarini yuklashda xatolik yuz berdi.');
     }
+  }
+
+  async handleInventoryPrev(ctx: BotContext): Promise<void> {
+    const currentIndex = ctx.session?.whInventoryIndex ?? 0;
+    const total = ctx.session?.whInventoryIds?.length ?? 0;
+    const newIndex = currentIndex > 0 ? currentIndex - 1 : total - 1;
+    await this.handleInventory(ctx, newIndex);
+  }
+
+  async handleInventoryNext(ctx: BotContext): Promise<void> {
+    const currentIndex = ctx.session?.whInventoryIndex ?? 0;
+    const total = ctx.session?.whInventoryIds?.length ?? 0;
+    const newIndex = currentIndex < total - 1 ? currentIndex + 1 : 0;
+    await this.handleInventory(ctx, newIndex);
   }
 
   // --- Conversation builders ---

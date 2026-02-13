@@ -110,43 +110,77 @@ export class BossMenu {
     }
   }
 
-  async handleDebts(ctx: BotContext): Promise<void> {
+  async handleDebts(ctx: BotContext, index?: number): Promise<void> {
     try {
       if (!ctx.session?.userId) { await ctx.reply('Avval tizimga kiring: /start'); return; }
       const user = sessionToUser(ctx.session, ctx.from!.id);
       const supplierDebts = await this.analyticsService.getSupplierDebts(user);
       const workerDebts = await this.analyticsService.getWorkerDebts(user);
 
+      // Combine all debts into one list
+      type DebtItem = { type: 'supplier' | 'worker'; name: string; amount: number; id: string };
+      const allDebts: DebtItem[] = [];
+      for (const s of supplierDebts.suppliers) {
+        if (s.totalDebt > 0) {
+          allDebts.push({ type: 'supplier', name: s.supplierName, amount: s.totalDebt, id: `s_${s.supplierId}` });
+        }
+      }
+      for (const w of workerDebts.workers) {
+        if (w.debt > 0) {
+          allDebts.push({ type: 'worker', name: w.workerName, amount: w.debt, id: `w_${w.workerId}` });
+        }
+      }
+
+      // Cache IDs for navigation
+      ctx.session.bossDebtIds = allDebts.map((d) => d.id);
+
       let text = `💰 <b>QARZLAR</b>\n`;
       text += `🏗️ ${ctx.session?.selectedProjectName}\n\n`;
 
-      text += `🏪 <b>PASTAVSHIKLAR:</b> ${formatMoneyFull(supplierDebts.totalDebt)}\n`;
-      if (supplierDebts.suppliers.length > 0) {
-        for (const s of supplierDebts.suppliers.slice(0, 10)) {
-          text += `  • ${s.supplierName}: ${formatMoneyFull(s.totalDebt)}\n`;
+      const totalDebt = supplierDebts.totalDebt + workerDebts.totalDebt;
+      text += `📊 <b>Jami qarz:</b> ${formatMoneyFull(totalDebt)}\n`;
+      text += `   🏪 Pastavshiklar: ${formatMoneyFull(supplierDebts.totalDebt)}\n`;
+      text += `   👷 Ustalar: ${formatMoneyFull(workerDebts.totalDebt)}\n\n`;
+
+      if (allDebts.length === 0) {
+        text += `Qarzlar yo'q ✅`;
+        const keyboard = new InlineKeyboard()
+          .text('📊 Statistika', 'boss:dashboard').row()
+          .text('🔙 Menyu', 'main_menu');
+        if (ctx.callbackQuery) {
+          await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
+        } else {
+          await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
         }
-        if (supplierDebts.suppliers.length > 10) {
-          text += `  ... va yana ${supplierDebts.suppliers.length - 10} ta\n`;
-        }
-      } else {
-        text += `  Qarz yo'q\n`;
+        return;
       }
 
-      text += `\n👷 <b>USTALAR:</b> ${formatMoneyFull(workerDebts.totalDebt)}\n`;
-      if (workerDebts.workers.length > 0) {
-        for (const w of workerDebts.workers.slice(0, 10)) {
-          text += `  • ${w.workerName}: ${formatMoneyFull(w.debt)}\n`;
-        }
-        if (workerDebts.workers.length > 10) {
-          text += `  ... va yana ${workerDebts.workers.length - 10} ta\n`;
-        }
-      } else {
-        text += `  Qarz yo'q\n`;
+      // Determine current index
+      const currentIndex = index ?? ctx.session.bossDebtsIndex ?? 0;
+      const safeIndex = Math.max(0, Math.min(currentIndex, allDebts.length - 1));
+      ctx.session.bossDebtsIndex = safeIndex;
+
+      const debt = allDebts[safeIndex];
+      const total = allDebts.length;
+      const typeIcon = debt.type === 'supplier' ? '🏪' : '👷';
+      const typeText = debt.type === 'supplier' ? 'Pastavshik' : 'Usta';
+
+      text += `${typeIcon} <b>${escapeHtml(debt.name)}</b>\n`;
+      text += `   📋 Turi: ${typeText}\n`;
+      text += `   💰 Qarz: ${formatMoneyFull(debt.amount)}\n`;
+
+      const keyboard = new InlineKeyboard();
+
+      // Navigation row (only if more than 1 item)
+      if (total > 1) {
+        keyboard.text('◀️ Oldingi', 'boss:debts_prev');
+        keyboard.text(`${safeIndex + 1}/${total}`, 'noop');
+        keyboard.text('Keyingi ▶️', 'boss:debts_next');
+        keyboard.row();
       }
 
-      const keyboard = new InlineKeyboard()
-        .text('📊 Statistika', 'boss:dashboard').row()
-        .text('🔙 Menyu', 'main_menu');
+      keyboard.text('📊 Statistika', 'boss:dashboard').row();
+      keyboard.text('🔙 Menyu', 'main_menu');
 
       if (ctx.callbackQuery) {
         await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
@@ -157,6 +191,20 @@ export class BossMenu {
       this.logger.error('Debts error', error);
       await ctx.reply('Qarzlarni yuklashda xatolik yuz berdi.');
     }
+  }
+
+  async handleDebtsPrev(ctx: BotContext): Promise<void> {
+    const currentIndex = ctx.session?.bossDebtsIndex ?? 0;
+    const total = ctx.session?.bossDebtIds?.length ?? 0;
+    const newIndex = currentIndex > 0 ? currentIndex - 1 : total - 1;
+    await this.handleDebts(ctx, newIndex);
+  }
+
+  async handleDebtsNext(ctx: BotContext): Promise<void> {
+    const currentIndex = ctx.session?.bossDebtsIndex ?? 0;
+    const total = ctx.session?.bossDebtIds?.length ?? 0;
+    const newIndex = currentIndex < total - 1 ? currentIndex + 1 : 0;
+    await this.handleDebts(ctx, newIndex);
   }
 
   async handleWarehouse(ctx: BotContext): Promise<void> {
@@ -270,90 +318,125 @@ export class BossMenu {
     }
   }
 
-  async handlePending(ctx: BotContext): Promise<void> {
+  async handlePending(ctx: BotContext, index?: number): Promise<void> {
     try {
       if (!ctx.session?.userId) { await ctx.reply('Avval tizimga kiring: /start'); return; }
       const user = sessionToUser(ctx.session, ctx.from!.id);
       const projectId = ctx.session?.selectedProjectId;
 
-      let text = `⏳ <b>KUTILAYOTGAN SO'ROVLAR</b>\n`;
-      text += `🏗️ ${ctx.session?.selectedProjectName}\n\n`;
-
-      const keyboard = new InlineKeyboard();
+      // Collect all pending items
+      type PendingItem = { type: 'request' | 'cash' | 'expense'; id: string; data: any };
+      const allPending: PendingItem[] = [];
 
       // Pending material requests
       const pendingRequests = await this.requestsService.findAll(
-        { projectId, status: RequestStatus.PENDING, page: 1, limit: 10 },
+        { projectId, status: RequestStatus.PENDING, page: 1, limit: 100 },
         user,
       );
-
-      text += `📦 <b>MATERIAL SO'ROVLARI:</b>\n`;
-      if (pendingRequests.data.length > 0) {
-        for (let i = 0; i < pendingRequests.data.length; i++) {
-          const req = pendingRequests.data[i];
-          const num = i + 1;
-          text += `  <b>#${num}</b> ${escapeHtml(req.smetaItem?.name || 'Noma\'lum')} — ${req.requestedQty} ${escapeHtml(req.smetaItem?.unit || '')}`;
-          if (req.requestedAmount) text += ` | ${formatMoneyFull(req.requestedAmount)}`;
-          if (req.note) text += `\n  📝 ${escapeHtml(req.note)}`;
-          text += `\n`;
-          keyboard.text(`✅ #${num}`, `boss:ar:${req.id}`).text(`❌ #${num}`, `boss:rr:${req.id}`).row();
-        }
-        if (pendingRequests.total > 10) {
-          text += `  ... va yana ${pendingRequests.total - 10} ta\n`;
-        }
-      } else {
-        text += `  So'rovlar yo'q ✅\n`;
+      for (const req of pendingRequests.data) {
+        allPending.push({ type: 'request', id: req.id, data: req });
       }
 
       // Pending cash requests
       const pendingCash = await this.cashRequestsService.findAll(
-        { projectId, status: CashRequestStatus.PENDING, page: 1, limit: 10 },
+        { projectId, status: CashRequestStatus.PENDING, page: 1, limit: 100 },
         user,
       );
-
-      text += `\n💰 <b>PUL ZAYAVKALARI:</b>\n`;
-      const reqOffset = pendingRequests.data.length;
-      if (pendingCash.data.length > 0) {
-        for (let i = 0; i < pendingCash.data.length; i++) {
-          const cr = pendingCash.data[i];
-          const num = reqOffset + i + 1;
-          text += `  <b>#${num}</b> ${formatMoneyFull(cr.amount)}`;
-          if (cr.reason) text += ` — ${escapeHtml(cr.reason)}`;
-          if (cr.requestedBy?.name) text += `\n  👤 ${escapeHtml(cr.requestedBy.name)}`;
-          text += `\n`;
-          keyboard.text(`✅ #${num}`, `boss:ac:${cr.id}`).text(`❌ #${num}`, `boss:rc:${cr.id}`).row();
-        }
-        if (pendingCash.total > 10) {
-          text += `  ... va yana ${pendingCash.total - 10} ta\n`;
-        }
-      } else {
-        text += `  Zayavkalar yo'q ✅\n`;
+      for (const cr of pendingCash.data) {
+        allPending.push({ type: 'cash', id: cr.id, data: cr });
       }
 
       // Pending expenses (isPaid=false)
       const pendingExpenses = await this.expensesService.findAllExpenses(
-        { projectId, isPaid: false, page: 1, limit: 10 },
+        { projectId, isPaid: false, page: 1, limit: 100 },
         user,
       );
+      for (const exp of pendingExpenses.data) {
+        allPending.push({ type: 'expense', id: exp.id, data: exp });
+      }
 
-      text += `\n💸 <b>RASXODLAR (tasdiqlanmagan):</b>\n`;
-      const cashOffset = reqOffset + pendingCash.data.length;
-      if (pendingExpenses.data.length > 0) {
-        for (let i = 0; i < pendingExpenses.data.length; i++) {
-          const exp = pendingExpenses.data[i];
-          const num = cashOffset + i + 1;
-          text += `  <b>#${num}</b> ${formatMoneyFull(exp.amount)} — ${escapeHtml(exp.recipient)}`;
-          if (exp.category) text += ` (${exp.category})`;
-          if (exp.note) text += `\n  📝 ${escapeHtml(exp.note)}`;
-          if (exp.recordedBy?.name) text += `\n  👤 ${escapeHtml(exp.recordedBy.name)}`;
-          text += `\n`;
-          keyboard.text(`✅ #${num}`, `boss:ae:${exp.id}`).text(`❌ #${num}`, `boss:re:${exp.id}`).row();
+      // Cache IDs for navigation
+      ctx.session.bossPendingIds = allPending.map((p) => `${p.type}:${p.id}`);
+
+      let text = `⏳ <b>KUTILAYOTGAN SO'ROVLAR</b>\n`;
+      text += `🏗️ ${ctx.session?.selectedProjectName}\n\n`;
+
+      // Show summary counts
+      text += `📊 <b>Jami:</b> ${allPending.length} ta\n`;
+      text += `   📦 Material: ${pendingRequests.data.length}\n`;
+      text += `   💰 Pul: ${pendingCash.data.length}\n`;
+      text += `   💸 Rasxod: ${pendingExpenses.data.length}\n\n`;
+
+      if (allPending.length === 0) {
+        text += `Kutilayotgan so'rovlar yo'q ✅`;
+        const keyboard = new InlineKeyboard()
+          .text('📊 Statistika', 'boss:dashboard').row()
+          .text('🔙 Menyu', 'main_menu');
+        if (ctx.callbackQuery) {
+          await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
+        } else {
+          await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
         }
-        if (pendingExpenses.total > 10) {
-          text += `  ... va yana ${pendingExpenses.total - 10} ta\n`;
-        }
+        return;
+      }
+
+      // Determine current index
+      const currentIndex = index ?? ctx.session.bossPendingIndex ?? 0;
+      const safeIndex = Math.max(0, Math.min(currentIndex, allPending.length - 1));
+      ctx.session.bossPendingIndex = safeIndex;
+
+      const item = allPending[safeIndex];
+      const total = allPending.length;
+
+      if (item.type === 'request') {
+        const req = item.data;
+        text += `📦 <b>MATERIAL SO'ROVI</b>\n\n`;
+        text += `📦 ${escapeHtml(req.smetaItem?.name || 'Noma\'lum')}\n`;
+        text += `   📊 Miqdor: ${req.requestedQty} ${escapeHtml(req.smetaItem?.unit || '')}\n`;
+        if (req.requestedAmount) text += `   💰 Summa: ${formatMoneyFull(req.requestedAmount)}\n`;
+        if (req.note) text += `   📝 ${escapeHtml(req.note)}\n`;
+        if (req.requestedBy?.name) text += `   👷 So'ragan: ${escapeHtml(req.requestedBy.name)}\n`;
+        ctx.session.bossPendingType = 'request';
+      } else if (item.type === 'cash') {
+        const cr = item.data;
+        text += `💰 <b>PUL ZAYAVKASI</b>\n\n`;
+        text += `💰 ${formatMoneyFull(cr.amount)}\n`;
+        if (cr.reason) text += `   📝 Sabab: ${escapeHtml(cr.reason)}\n`;
+        if (cr.requestedBy?.name) text += `   👤 So'ragan: ${escapeHtml(cr.requestedBy.name)}\n`;
+        ctx.session.bossPendingType = 'cash';
       } else {
-        text += `  Tasdiqlanmagan rasxodlar yo'q ✅\n`;
+        const exp = item.data;
+        text += `💸 <b>RASXOD</b>\n\n`;
+        text += `💸 ${formatMoneyFull(exp.amount)} — ${escapeHtml(exp.recipient)}\n`;
+        if (exp.category) text += `   📋 Kategoriya: ${exp.category}\n`;
+        if (exp.note) text += `   📝 ${escapeHtml(exp.note)}\n`;
+        if (exp.recordedBy?.name) text += `   👤 Kiritgan: ${escapeHtml(exp.recordedBy.name)}\n`;
+        ctx.session.bossPendingType = 'expense';
+      }
+
+      const keyboard = new InlineKeyboard();
+
+      // Navigation row (only if more than 1 item)
+      if (total > 1) {
+        keyboard.text('◀️ Oldingi', 'boss:pending_prev');
+        keyboard.text(`${safeIndex + 1}/${total}`, 'noop');
+        keyboard.text('Keyingi ▶️', 'boss:pending_next');
+        keyboard.row();
+      }
+
+      // Action buttons based on type
+      if (item.type === 'request') {
+        keyboard.text('✅ Tasdiqlash', `boss:ar:${item.id}`);
+        keyboard.text('❌ Rad etish', `boss:rr:${item.id}`);
+        keyboard.row();
+      } else if (item.type === 'cash') {
+        keyboard.text('✅ Tasdiqlash', `boss:ac:${item.id}`);
+        keyboard.text('❌ Rad etish', `boss:rc:${item.id}`);
+        keyboard.row();
+      } else {
+        keyboard.text('✅ Tasdiqlash', `boss:ae:${item.id}`);
+        keyboard.text('❌ Rad etish', `boss:re:${item.id}`);
+        keyboard.row();
       }
 
       keyboard.text('📊 Statistika', 'boss:dashboard').row();
@@ -368,6 +451,20 @@ export class BossMenu {
       this.logger.error('Pending requests error', error);
       await ctx.reply('Kutilayotgan so\'rovlarni yuklashda xatolik yuz berdi.');
     }
+  }
+
+  async handlePendingPrev(ctx: BotContext): Promise<void> {
+    const currentIndex = ctx.session?.bossPendingIndex ?? 0;
+    const total = ctx.session?.bossPendingIds?.length ?? 0;
+    const newIndex = currentIndex > 0 ? currentIndex - 1 : total - 1;
+    await this.handlePending(ctx, newIndex);
+  }
+
+  async handlePendingNext(ctx: BotContext): Promise<void> {
+    const currentIndex = ctx.session?.bossPendingIndex ?? 0;
+    const total = ctx.session?.bossPendingIds?.length ?? 0;
+    const newIndex = currentIndex < total - 1 ? currentIndex + 1 : 0;
+    await this.handlePending(ctx, newIndex);
   }
 
   async handleApproveRequest(ctx: BotContext, requestId: string): Promise<void> {
