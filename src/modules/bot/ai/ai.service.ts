@@ -366,30 +366,31 @@ Rules:
 - Return ONLY valid JSON, no extra text`,
 
       foreman_request: `You are a data extraction assistant for a construction project management system.
-Extract material request information from the user's message.
+Extract material request information from the user's message. The message may contain ONE or MULTIPLE items.
 The message is in Uzbek or Russian language.
 
-Return ONLY a JSON object with these fields (omit fields you cannot determine):
+Return ONLY a JSON object with an "items" array:
 {
-  "smetaItemName": "<string - smeta item / work type name>",
-  "requestedQty": <number - requested quantity (how many units/items)>,
-  "requestedUnit": "<string - unit of measurement: dona, kg, metr, m², m³, tonna, litr, qop, p.m.>",
-  "requestedAmount": <number - requested budget amount in money (so'm)>,
-  "deadline": "<string - when needed>",
-  "note": "<string - reason or additional notes>"
+  "items": [
+    {
+      "smetaItemName": "<string - smeta item / material name>",
+      "requestedQty": <number - requested quantity>,
+      "requestedUnit": "<string - unit: dona, kg, metr, m², m³, tonna, litr, qop>",
+      "deadline": "<string - when needed (optional)>",
+      "note": "<string - reason or notes (optional)>"
+    }
+  ]
 }
 
-IMPORTANT: requestedQty and requestedAmount are TWO DIFFERENT fields:
-- requestedQty = quantity of work (e.g. 10, 50, 120) — usually a small number
-- requestedUnit = unit of measurement (e.g. metr, dona, kg, tonna, m²)
-- requestedAmount = monetary budget in so'm (e.g. 60000000) — usually a large number
-Example: "Beton ishlari, 180 metr, 78,000,000" means requestedQty=180, requestedUnit="metr", requestedAmount=78000000
+Examples:
+- "Sement 100 qop, armatura 500 kg" → 2 items
+- "Rozetka 20 dona ertaga kerak" → 1 item with deadline "ertaga"
+- "G'isht 5000 dona, sement 50 qop, qum 10 m³" → 3 items
 
 Rules:
-- Common smeta/work types: Suvoq ishlari (plastering), G'isht terish (bricklaying), Plitka (tiling), Beton quyish (concrete), Armatura (rebar), Shpalaklyovka (putty), Boyoq (painting), Elektr montaj, Santexnika
-- Common units: dona (pieces), kg, tonna, metr (m), m² (sq meters), m³ (cubic meters), litr, qop (bags), p.m. (linear meters), reyka
-- Amounts should be plain numbers without currency symbols
-- If amounts use shorthand like "5 mln" or "5М", convert to full number (5000000)
+- ALWAYS return an "items" array, even for single item
+- Common materials: Sement, Armatura, G'isht, Qum, Shag'al, Rozetka, Kabel, Gips karton, Suvoq, Bo'yoq
+- Common units: dona (pieces), kg, tonna, metr, m², m³, litr, qop (bags)
 - Return ONLY valid JSON, no extra text`,
 
       supply_order: `You are a data extraction assistant for a construction project management system.

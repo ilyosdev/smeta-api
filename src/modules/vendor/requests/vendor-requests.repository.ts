@@ -13,6 +13,7 @@ import {
   smetas,
   projects,
   users,
+  UserRole,
 } from 'src/common/database/schemas';
 
 export type RequestWithRelations = PurchaseRequest & {
@@ -32,6 +33,14 @@ export type RequestWithRelations = PurchaseRequest & {
     name: string;
   } | null;
   fulfilledBy?: {
+    id: string;
+    name: string;
+  } | null;
+  assignedDriver?: {
+    id: string;
+    name: string;
+  } | null;
+  receivedBy?: {
     id: string;
     name: string;
   } | null;
@@ -218,5 +227,63 @@ export class VendorRequestsRepository {
       .where(eq(smetaItems.id, smetaItemId));
 
     return results.length > 0 ? results[0].orgId : null;
+  }
+
+  async findByDriver(
+    driverId: string,
+    orgId: string,
+    status?: RequestStatus,
+  ): Promise<{ data: RequestWithRelations[]; total: number }> {
+    const conditions: ReturnType<typeof eq>[] = [
+      eq(purchaseRequests.assignedDriverId, driverId),
+    ];
+
+    if (status) {
+      conditions.push(eq(purchaseRequests.status, status));
+    }
+
+    const results = await this.db
+      .select({
+        request: purchaseRequests,
+        smetaItem: {
+          id: smetaItems.id,
+          name: smetaItems.name,
+          unit: smetaItems.unit,
+          quantity: smetaItems.quantity,
+          unitPrice: smetaItems.unitPrice,
+        },
+        requestedBy: {
+          id: users.id,
+          name: users.name,
+        },
+      })
+      .from(purchaseRequests)
+      .innerJoin(smetaItems, eq(purchaseRequests.smetaItemId, smetaItems.id))
+      .innerJoin(smetas, eq(smetaItems.smetaId, smetas.id))
+      .innerJoin(projects, eq(smetas.projectId, projects.id))
+      .innerJoin(users, eq(purchaseRequests.requestedById, users.id))
+      .where(and(eq(projects.orgId, orgId), ...conditions))
+      .orderBy(desc(purchaseRequests.createdAt));
+
+    const data: RequestWithRelations[] = results.map((r) => ({
+      ...r.request,
+      smetaItem: r.smetaItem,
+      requestedBy: r.requestedBy,
+      approvedBy: null,
+      fulfilledBy: null,
+      assignedDriver: null,
+      receivedBy: null,
+    }));
+
+    return { data, total: data.length };
+  }
+
+  async findDrivers(orgId: string): Promise<{ id: string; name: string }[]> {
+    const results = await this.db
+      .select({ id: users.id, name: users.name })
+      .from(users)
+      .where(and(eq(users.orgId, orgId), eq(users.role, UserRole.HAYDOVCHI), eq(users.isActive, true)));
+
+    return results;
   }
 }

@@ -3,11 +3,13 @@ import { InlineKeyboard } from 'grammy';
 import { createConversation } from '@grammyjs/conversations';
 
 import { VendorWarehousesService } from 'src/modules/vendor/warehouses/vendor-warehouses.service';
+import { VendorRequestsService } from 'src/modules/vendor/requests/vendor-requests.service';
 import { AiService } from 'src/modules/bot/ai/ai.service';
+import { RequestStatus } from 'src/common/database/schemas';
 
 import { BotContext, BotConversation } from '../types/context';
 import { sessionToUser } from '../helpers/session-to-user';
-import { escapeHtml, parseNumber } from '../helpers/format';
+import { escapeHtml, parseNumber, formatMoneyFull } from '../helpers/format';
 import { buildConfirmationKeyboard } from '../keyboards/confirmation.keyboard';
 import { textWithCancel, waitForCallbackOrCancel } from '../helpers/cancel';
 import { runSingleMessageFlow } from '../helpers/single-message-flow';
@@ -19,6 +21,7 @@ export class WarehouseMenu {
 
   constructor(
     private readonly warehousesService: VendorWarehousesService,
+    private readonly requestsService: VendorRequestsService,
     private readonly aiService: AiService,
   ) {}
 
@@ -27,6 +30,7 @@ export class WarehouseMenu {
       createConversation(this.buildAddItemConversation(), 'wh_add_item'),
       createConversation(this.buildRemoveItemConversation(), 'wh_remove_item'),
       createConversation(this.buildTransferConversation(), 'wh_transfer'),
+      createConversation(this.buildReceiveDeliveryConversation(), 'wh_receive_delivery'),
     ];
   }
 
@@ -52,6 +56,69 @@ export class WarehouseMenu {
       return;
     }
     await ctx.conversation.enter('wh_transfer');
+  }
+
+  /**
+   * Show pending deliveries (DELIVERED status waiting for warehouse receipt)
+   */
+  async handlePendingDeliveries(ctx: BotContext): Promise<void> {
+    try {
+      if (!ctx.session?.userId) {
+        await ctx.reply('Avval tizimga kiring: /start');
+        return;
+      }
+      const user = sessionToUser(ctx.session, ctx.from!.id);
+      const projectId = ctx.session?.selectedProjectId;
+
+      const result = await this.requestsService.findPendingReceipt(projectId, user);
+
+      let text = `🚚 <b>KUTILAYOTGAN YETKAZMALAR</b>\n`;
+      text += `🏗️ ${escapeHtml(ctx.session?.selectedProjectName || '')}\n\n`;
+
+      if (result.data.length === 0) {
+        text += `Hozircha kutilayotgan yetkazmalar yo'q.`;
+      } else {
+        for (const req of result.data) {
+          text += `📦 <b>${escapeHtml(req.smetaItem?.name || 'Noma\'lum')}</b>\n`;
+          text += `   📊 Yetkazilgan: ${req.deliveredQty} ${req.smetaItem?.unit || ''}\n`;
+          text += `   💰 Summa: ${formatMoneyFull(req.approvedAmount || req.requestedAmount)}\n`;
+          if (req.deliveredAt) {
+            text += `   🕐 ${new Date(req.deliveredAt).toLocaleString('uz-UZ')}\n`;
+          }
+          text += '\n';
+        }
+      }
+
+      const keyboard = new InlineKeyboard();
+      for (const req of result.data.slice(0, 10)) {
+        keyboard.text(
+          `📦 ${(req.smetaItem?.name || 'Noma\'lum').slice(0, 20)}`,
+          `wh:receive:${req.id}`,
+        ).row();
+      }
+      keyboard.text('🔙 Menyu', 'main_menu');
+
+      if (ctx.callbackQuery) {
+        await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
+      } else {
+        await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
+      }
+    } catch (error) {
+      this.logger.error('Pending deliveries error', error);
+      await ctx.reply('Yetkazmalarni yuklashda xatolik yuz berdi.');
+    }
+  }
+
+  /**
+   * Start receive delivery conversation
+   */
+  async handleReceiveDelivery(ctx: BotContext, requestId: string): Promise<void> {
+    if (!ctx.session) {
+      await ctx.reply('Avval tizimga kiring: /start');
+      return;
+    }
+    ctx.session.pendingReceiveRequestId = requestId;
+    await ctx.conversation.enter('wh_receive_delivery');
   }
 
   async handleInventory(ctx: BotContext): Promise<void> {
@@ -465,6 +532,124 @@ export class WarehouseMenu {
         await ctx.reply('Ko\'chirish muvaffaqiyatli amalga oshirildi! ✅');
       } catch {
         await ctx.reply('Ko\'chirishda xatolik yuz berdi. ❌');
+      }
+    };
+  }
+
+  private buildReceiveDeliveryConversation() {
+    const requestsService = this.requestsService;
+    const warehousesService = this.warehousesService;
+
+    return async function whReceiveDelivery(
+      conversation: BotConversation,
+      ctx: BotContext,
+    ) {
+      const requestId = await conversation.external((ctx) => ctx.session?.pendingReceiveRequestId);
+      const projectId = await conversation.external((ctx) => ctx.session?.selectedProjectId);
+      if (!requestId) {
+        await ctx.reply('Yetkazma topilmadi. Qaytadan urinib ko\'ring.');
+        return;
+      }
+
+      const user = await conversation.external((ctx) =>
+        sessionToUser(ctx.session, ctx.from!.id),
+      );
+
+      // Fetch the request
+      const request = await conversation.external(() =>
+        requestsService.findOne(requestId, user),
+      );
+
+      if (!request) {
+        await ctx.reply('Yetkazma topilmadi. ❌');
+        return;
+      }
+
+      if (request.status !== RequestStatus.DELIVERED) {
+        await ctx.reply('Bu yetkazma allaqachon qabul qilingan yoki bekor qilingan. ❌');
+        return;
+      }
+
+      // Show delivery details
+      await ctx.reply(
+        `📦 <b>YETKAZMA QABUL QILISH</b>\n\n` +
+        `📦 ${escapeHtml(request.smetaItem?.name || 'Noma\'lum')}\n` +
+        `📊 Yetkazilgan: ${request.deliveredQty} ${request.smetaItem?.unit || ''}\n` +
+        `💰 Summa: ${formatMoneyFull(request.approvedAmount || request.requestedAmount)}\n\n` +
+        `Qabul qilingan miqdorni kiriting:\n\n<i>/cancel - bekor qilish</i>`,
+        { parse_mode: 'HTML' },
+      );
+
+      let receivedQty: number;
+      for (;;) {
+        const raw = await textWithCancel(conversation, ctx);
+        receivedQty = parseNumber(raw);
+        if (!isNaN(receivedQty) && receivedQty >= 0) break;
+        await ctx.reply('Iltimos, to\'g\'ri raqam kiriting (masalan: 500 yoki 500,000):');
+      }
+
+      // Optional note
+      await ctx.reply('Izoh kiriting (yoki "yo\'q" deb yozing):', { parse_mode: 'HTML' });
+      const noteRaw = await textWithCancel(conversation, ctx);
+      const note = noteRaw.toLowerCase() === 'yo\'q' ? undefined : noteRaw;
+
+      // Optional photo
+      await ctx.reply('📸 Rasm yuboring (yoki "yo\'q" deb yozing):', { parse_mode: 'HTML' });
+      let photoFileId: string | undefined;
+      for (;;) {
+        const photoCtx = await conversation.wait();
+        if (photoCtx.message?.text === '/cancel' || photoCtx.callbackQuery?.data === 'conv:cancel') {
+          if (photoCtx.callbackQuery) { try { await photoCtx.answerCallbackQuery(); } catch {} }
+          await ctx.reply('Bekor qilindi. ❌');
+          return;
+        }
+        if (photoCtx.message?.text?.toLowerCase() === 'yo\'q') {
+          break;
+        }
+        if (photoCtx.message?.photo) {
+          const photos = photoCtx.message.photo;
+          photoFileId = photos[photos.length - 1].file_id;
+          break;
+        }
+        await ctx.reply('Iltimos, rasm yuboring yoki "yo\'q" deb yozing:');
+      }
+
+      // Show confirmation
+      let summary = `📋 <b>QABUL TASDIQLANSIN?</b>\n\n`;
+      summary += `📦 ${escapeHtml(request.smetaItem?.name || '')}\n`;
+      summary += `📊 Qabul qilingan: ${receivedQty} ${request.smetaItem?.unit || ''}\n`;
+      if (note) summary += `📝 Izoh: ${escapeHtml(note)}\n`;
+      if (photoFileId) summary += `📸 Rasm: Ha\n`;
+
+      await ctx.reply(summary, {
+        parse_mode: 'HTML',
+        reply_markup: buildConfirmationKeyboard('whrec', { withEdit: false }),
+      });
+
+      const confirmCtx = await waitForCallbackOrCancel(conversation, ctx, /^whrec:(confirm|cancel)/, {
+        otherwise: (ctx) => ctx.reply('Iltimos, tasdiqlang yoki bekor qiling.'),
+      });
+      try { await confirmCtx.answerCallbackQuery(); } catch {}
+
+      if (confirmCtx.callbackQuery!.data === 'whrec:cancel') {
+        await ctx.reply('Bekor qilindi. ❌');
+        return;
+      }
+
+      try {
+        // Confirm receipt in request (goes to RECEIVED status, waiting for MODERATOR)
+        await conversation.external(() =>
+          requestsService.confirmReceipt(requestId, {
+            receivedQty,
+            note,
+            photoFileId,
+          }, user),
+        );
+
+        await ctx.reply('Yetkazma qabul qilindi! ✅\n\nModerator narxlarni kiritishi kerak.');
+      } catch (err: any) {
+        console.error('[whReceiveDelivery] error:', err?.message || err);
+        await ctx.reply('Qabul qilishda xatolik yuz berdi. ❌');
       }
     };
   }

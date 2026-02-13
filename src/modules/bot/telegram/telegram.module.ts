@@ -33,6 +33,8 @@ import { SuperAdminMenu } from './menus/super-admin.menu';
 import { OperatorMenu } from './menus/operator.menu';
 import { WorkerMenu } from './menus/worker.menu';
 import { SupplierMenu } from './menus/supplier.menu';
+import { DriverMenu } from './menus/driver.menu';
+import { ModeratorMenu } from './menus/moderator.menu';
 
 @Module({
   imports: [
@@ -70,6 +72,8 @@ import { SupplierMenu } from './menus/supplier.menu';
     OperatorMenu,
     WorkerMenu,
     SupplierMenu,
+    DriverMenu,
+    ModeratorMenu,
   ],
 })
 export class TelegramModule {}

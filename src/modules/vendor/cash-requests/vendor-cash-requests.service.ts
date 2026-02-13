@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 
 import { IUser, Roles } from 'src/common/consts/auth';
-import { RequestStatus, DataSource, CashTransactionType } from 'src/common/database/schemas';
+import { CashRequestStatus, DataSource, CashTransactionType } from 'src/common/database/schemas';
 import { HandledException } from 'src/common/error/http.error';
 import { VendorCashRegistersService } from '../cash-registers/vendor-cash-registers.service';
 
@@ -43,7 +43,7 @@ export class VendorCashRequestsService {
   }
 
   async findAll(
-    query: { page?: number; limit?: number; status?: RequestStatus; projectId?: string },
+    query: { page?: number; limit?: number; status?: CashRequestStatus; projectId?: string },
     user: IUser,
   ): Promise<{ data: CashRequestWithRelations[]; total: number; page: number; limit: number }> {
     const { page = 1, limit = 10, status, projectId } = query;
@@ -62,7 +62,7 @@ export class VendorCashRequestsService {
   async approve(id: string, user: IUser): Promise<CashRequestWithRelations> {
     const request = await this.findOne(id, user);
 
-    if (request.status !== RequestStatus.PENDING) {
+    if (request.status !== CashRequestStatus.PENDING) {
       HandledException.throw('CANNOT_APPROVE_NON_PENDING_REQUEST', 400);
     }
 
@@ -71,7 +71,7 @@ export class VendorCashRequestsService {
     }
 
     await this.repository.update(id, {
-      status: RequestStatus.APPROVED,
+      status: CashRequestStatus.APPROVED,
       approvedById: user.id,
       approvedAt: new Date(),
     });
@@ -111,7 +111,7 @@ export class VendorCashRequestsService {
   ): Promise<CashRequestWithRelations> {
     const request = await this.findOne(id, user);
 
-    if (request.status !== RequestStatus.PENDING) {
+    if (request.status !== CashRequestStatus.PENDING) {
       HandledException.throw('CANNOT_REJECT_NON_PENDING_REQUEST', 400);
     }
 
@@ -120,7 +120,7 @@ export class VendorCashRequestsService {
     }
 
     await this.repository.update(id, {
-      status: RequestStatus.REJECTED,
+      status: CashRequestStatus.REJECTED,
       approvedById: user.id,
       approvedAt: new Date(),
       rejectionReason: dto.rejectionReason,
@@ -132,7 +132,7 @@ export class VendorCashRequestsService {
   async remove(id: string, user: IUser): Promise<void> {
     const request = await this.findOne(id, user);
 
-    if (request.status !== RequestStatus.PENDING) {
+    if (request.status !== CashRequestStatus.PENDING) {
       HandledException.throw('CANNOT_DELETE_NON_PENDING_REQUEST', 400);
     }
 

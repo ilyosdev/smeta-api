@@ -5,6 +5,7 @@ import { createConversation } from '@grammyjs/conversations';
 import { VendorWorkersService } from 'src/modules/vendor/workers/vendor-workers.service';
 import { VendorRequestsService } from 'src/modules/vendor/requests/vendor-requests.service';
 import { VendorSmetaItemsService } from 'src/modules/vendor/smeta-items/vendor-smeta-items.service';
+import { VendorSmetasService } from 'src/modules/vendor/smetas/vendor-smetas.service';
 import { AiService } from 'src/modules/bot/ai/ai.service';
 import { BotAdminService } from 'src/modules/bot/admin/bot-admin.service';
 import { BotAuthService } from 'src/modules/bot/auth/bot-auth.service';
@@ -29,6 +30,7 @@ export class ForemanMenu {
     private readonly workersService: VendorWorkersService,
     private readonly requestsService: VendorRequestsService,
     private readonly smetaItemsService: VendorSmetaItemsService,
+    private readonly smetasService: VendorSmetasService,
     private readonly aiService: AiService,
     private readonly adminService: BotAdminService,
     private readonly authService: BotAuthService,
@@ -512,6 +514,7 @@ export class ForemanMenu {
   private buildRequestConversation() {
     const requestsService = this.requestsService;
     const smetaItemsService = this.smetaItemsService;
+    const smetasService = this.smetasService;
     const aiService = this.aiService;
 
     return async function foremanRequest(
@@ -530,92 +533,345 @@ export class ForemanMenu {
       );
 
       // Fetch smeta items for matching
-      const smetaItems = await conversation.external(() =>
-        smetaItemsService.findAll({ projectId, page: 1, limit: 50 }, user),
+      let smetaItemsList = await conversation.external(() =>
+        smetaItemsService.findAll({ projectId, page: 1, limit: 100 }, user),
       );
 
-      if (smetaItems.data.length === 0) {
-        await ctx.reply('Bu loyihada smeta elementlari topilmadi.');
-        return;
-      }
-
-      // Single-message flow — smeta item name included
-      const result = await runSingleMessageFlow(
-        conversation, ctx, FOREMAN_REQUEST_FORM, aiService,
-        { projectName },
-      );
-      if (!result || !result.confirmed) return;
-
-      // Fuzzy match smeta item by name
-      const inputName = (result.data.smetaItemName || '').toLowerCase().trim();
-      let matched = smetaItems.data.find(
-        (si) => si.name.toLowerCase() === inputName,
-      );
-      if (!matched) {
-        matched = smetaItems.data.find(
-          (si) => si.name.toLowerCase().includes(inputName) || inputName.includes(si.name.toLowerCase()),
-        );
-      }
-
-      if (!matched) {
-        // Not found in smeta — find or create a "Boshqa" item
-        const smetaId = smetaItems.data[0]?.smeta?.id;
-        if (!smetaId) {
-          await ctx.reply('Smeta topilmadi. \u{274C}');
-          return;
-        }
-
-        // Look for existing "Boshqa" item
-        matched = smetaItems.data.find(
-          (si) => si.name.toLowerCase() === 'boshqa' && si.itemType === SmetaItemCategory.OTHER,
-        );
-
-        if (!matched) {
-          // Create "Boshqa" smeta item
-          const created = await conversation.external(() =>
-            smetaItemsService.create(
-              {
-                smetaId,
-                name: 'Boshqa',
-                category: 'Boshqa',
-                unit: 'dona',
-                quantity: 0,
-                unitPrice: 0,
-                itemType: SmetaItemCategory.OTHER,
-                source: DataSource.TELEGRAM,
-              },
-              user,
-            ),
-          );
-          matched = created;
-        }
-      }
-
-      try {
-        // If stored as "Boshqa", include original name in note
-        const isBoshqa = matched!.name === 'Boshqa';
-        const noteParts = [
-          isBoshqa ? `[${result.data.smetaItemName}]` : '',
-          result.data.note,
-          result.data.deadline ? `Kerak: ${result.data.deadline}` : '',
-        ];
-        const fullNote = noteParts.filter(Boolean).join(' | ');
-
-        await conversation.external(() =>
-          requestsService.create(
-            {
-              smetaItemId: matched!.id,
-              requestedQty: result.data.requestedQty,
-              requestedAmount: 0,
-              note: fullNote || `${matched!.name} kerak`,
-              source: DataSource.TELEGRAM,
-            },
+      // If no smeta items exist, create a default smeta
+      let smetaId: string | undefined;
+      if (smetaItemsList.data.length === 0) {
+        const newSmeta = await conversation.external(() =>
+          smetasService.create(
+            { projectId, name: 'Asosiy smeta', type: 'CONSTRUCTION' as any },
             user,
           ),
         );
-        await ctx.reply('Zayavka muvaffaqiyatli yuborildi! \u{2705}');
-      } catch {
-        await ctx.reply('Zayavkani saqlashda xatolik yuz berdi. \u{274C}');
+        smetaId = newSmeta.id;
+        await ctx.reply('Yangi smeta yaratildi. Davom eting.');
+      } else {
+        smetaId = smetaItemsList.data[0]?.smeta?.id;
+      }
+
+      // Main loop - allows adding multiple requests
+      let continueAdding = true;
+      while (continueAdding) {
+        // Prompt for input
+        await ctx.reply(
+          `\u{1F4E6} <b>MATERIAL ZAYAVKASI</b>\n` +
+          `\u{1F3D7}\u{FE0F} ${escapeHtml(projectName)}\n\n` +
+          `Kerakli materiallarni yozing (bir nechta bo'lishi mumkin):\n` +
+          `Masalan: "Sement 100 qop, armatura 500 kg, rozetka 20 dona"\n\n` +
+          `\u{1F4DD} Matn, \u{1F399}\u{FE0F} ovoz yoki \u{1F4F8} rasm yuboring.\n` +
+          `<i>/cancel - bekor qilish</i>`,
+          { parse_mode: 'HTML' },
+        );
+
+        // Wait for input
+        const inputCtx = await conversation.wait();
+        if (inputCtx.message?.text?.toLowerCase() === '/cancel') {
+          await ctx.reply('Bekor qilindi.');
+          return;
+        }
+
+        // Extract items using AI or manual parsing
+        let extractedItems: any[] = [];
+
+        if (inputCtx.message?.voice && aiService.isAvailable()) {
+          await ctx.reply('\u{1F399}\u{FE0F} Ovoz qayta ishlanmoqda...');
+          try {
+            const file = await inputCtx.getFile();
+            const result = await conversation.external(async () => {
+              const buffer = await aiService.downloadTelegramFile(file.file_path!);
+              // Convert OGG to MP3 for Gemini
+              const mp3Buffer = await aiService.convertOgaToMp3(buffer);
+              return aiService.extractFromAudio(mp3Buffer, 'audio/mp3', 'foreman_request');
+            });
+            extractedItems = result?.items || [result];
+          } catch {
+            await ctx.reply('Ovozni qayta ishlashda xatolik. Matn yuboring.');
+            continue;
+          }
+        } else if (inputCtx.message?.photo && aiService.isAvailable()) {
+          await ctx.reply('\u{1F4F8} Rasm qayta ishlanmoqda...');
+          try {
+            const photos = inputCtx.message.photo;
+            const photo = photos[photos.length - 1];
+            const file = await inputCtx.api.getFile(photo.file_id);
+            const result = await conversation.external(async () => {
+              const buffer = await aiService.downloadTelegramFile(file.file_path!);
+              return aiService.extractFromImage(buffer, 'image/jpeg', 'foreman_request');
+            });
+            extractedItems = result?.items || [result];
+          } catch {
+            await ctx.reply('Rasmni qayta ishlashda xatolik. Matn yuboring.');
+            continue;
+          }
+        } else if (inputCtx.message?.text) {
+          const text = inputCtx.message.text;
+          console.log('[foremanRequest] Input text:', text);
+          // Try AI extraction first, fall back to manual parsing
+          if (aiService.isAvailable()) {
+            try {
+              const result = await conversation.external(() =>
+                aiService.extractFromText(text, 'foreman_request'),
+              );
+              console.log('[foremanRequest] AI result:', JSON.stringify(result));
+              extractedItems = result?.items || [result];
+            } catch (err: any) {
+              console.log('[foremanRequest] AI failed:', err?.message || err);
+              // AI failed, use manual parsing
+              extractedItems = parseRequestText(text);
+            }
+          } else {
+            console.log('[foremanRequest] AI not available, using manual parsing');
+            // AI not available, use manual parsing
+            extractedItems = parseRequestText(text);
+          }
+          console.log('[foremanRequest] Extracted items:', JSON.stringify(extractedItems));
+        } else {
+          console.log('[foremanRequest] No text/voice/photo, continuing');
+          continue;
+        }
+
+        // Helper function to parse request text manually
+        function parseRequestText(text: string): any[] {
+          const items: any[] = [];
+          // Split by comma, newline, or semicolon
+          const parts = text.split(/[,;\n]+/).map((p) => p.trim()).filter(Boolean);
+          for (const part of parts) {
+            // Match: "Material 100 dona" or "100 dona Material" or "Material 100"
+            const match = part.match(/^(.+?)\s+(\d+)\s*(\S+)?$/i)
+              || part.match(/^(\d+)\s*(\S+)?\s+(.+)$/i);
+            if (match) {
+              const isQtyFirst = /^\d+/.test(match[1]);
+              const name = isQtyFirst ? match[3] : match[1];
+              const qty = isQtyFirst ? parseInt(match[1], 10) : parseInt(match[2], 10);
+              const unit = isQtyFirst ? match[2] : match[3];
+              if (name && qty) {
+                items.push({
+                  smetaItemName: name.trim(),
+                  requestedQty: qty,
+                  requestedUnit: unit?.trim() || 'dona',
+                });
+              }
+            } else if (part.length > 2) {
+              // Just material name without qty - default to 1
+              items.push({
+                smetaItemName: part,
+                requestedQty: 1,
+                requestedUnit: 'dona',
+              });
+            }
+          }
+          return items;
+        }
+
+        // Filter valid items
+        console.log('[foremanRequest] Before filter:', JSON.stringify(extractedItems));
+        extractedItems = extractedItems.filter(
+          (item) => item && item.smetaItemName && item.requestedQty,
+        );
+        console.log('[foremanRequest] After filter:', JSON.stringify(extractedItems));
+
+        if (extractedItems.length === 0) {
+          await ctx.reply('Material topilmadi. Qaytadan urinib ko\'ring.');
+          continue;
+        }
+
+        // Show ALL items in a single summary for confirmation
+        let confirmationLoop = true;
+        while (confirmationLoop) {
+          let summary = `\u{1F4E6} <b>ZAYAVKALAR RO'YXATI</b>\n`;
+          summary += `\u{1F3D7}\u{FE0F} ${escapeHtml(projectName)}\n\n`;
+
+          extractedItems.forEach((item, index) => {
+            summary += `<b>${index + 1}.</b> ${escapeHtml(item.smetaItemName)}\n`;
+            summary += `   Miqdor: <b>${item.requestedQty} ${item.requestedUnit || 'dona'}</b>\n`;
+            if (item.deadline) summary += `   Kerak: ${escapeHtml(item.deadline)}\n`;
+            if (item.note) summary += `   Izoh: ${escapeHtml(item.note)}\n`;
+            summary += '\n';
+          });
+
+          summary += `<b>Jami: ${extractedItems.length} ta zayavka</b>\n\n`;
+          summary += `Barchasini tasdiqlaysizmi?`;
+
+          const confirmKb = new InlineKeyboard()
+            .text('\u{2705} Tasdiqlash', 'req:confirm_all')
+            .text('\u{270F}\u{FE0F} Tahrirlash', 'req:edit_select')
+            .row()
+            .text('\u{274C} Bekor qilish', 'req:cancel_all');
+
+          await ctx.reply(summary, { parse_mode: 'HTML', reply_markup: confirmKb });
+
+          // Wait for confirmation
+          const confirmCtx = await waitForCallbackOrCancel(conversation, ctx, /^req:(confirm_all|edit_select|cancel_all)$/, {
+            otherwise: (ctx) => ctx.reply('Iltimos, tugmalardan birini bosing.'),
+          });
+          try { await confirmCtx.answerCallbackQuery(); } catch {}
+          const action = confirmCtx.callbackQuery!.data;
+          console.log('[foremanRequest] Confirmation action:', action);
+
+          if (action === 'req:cancel_all') {
+            await ctx.reply('Barcha zayavkalar bekor qilindi.');
+            confirmationLoop = false;
+            continue;
+          }
+
+          if (action === 'req:edit_select') {
+            // Show list of items to edit
+            const editKb = new InlineKeyboard();
+            extractedItems.forEach((item, index) => {
+              editKb.text(`${index + 1}. ${item.smetaItemName}`, `req:edit_item:${index}`).row();
+            });
+            editKb.text('\u{1F519} Orqaga', 'req:back_to_confirm');
+
+            await ctx.reply('Qaysi zayavkani tahrirlash yoki o\'chirish?', { reply_markup: editKb });
+
+            const editSelectCtx = await waitForCallbackOrCancel(conversation, ctx, /^req:(edit_item:\d+|back_to_confirm)$/, {
+              otherwise: (ctx) => ctx.reply('Iltimos, tugmalardan birini bosing.'),
+            });
+            try { await editSelectCtx.answerCallbackQuery(); } catch {}
+            const editAction = editSelectCtx.callbackQuery!.data;
+
+            if (!editAction || editAction === 'req:back_to_confirm') {
+              continue; // Go back to confirmation
+            }
+
+            const editIndex = parseInt(editAction!.split(':')[2], 10);
+            const itemToEdit = extractedItems[editIndex];
+
+            if (!itemToEdit) continue;
+
+            // Show edit options for this item
+            const itemEditKb = new InlineKeyboard()
+              .text('\u{270F}\u{FE0F} Miqdorni o\'zgartirish', `req:change_qty:${editIndex}`)
+              .row()
+              .text('\u{1F5D1}\u{FE0F} O\'chirish', `req:delete_item:${editIndex}`)
+              .row()
+              .text('\u{1F519} Orqaga', 'req:back_to_edit_list');
+
+            await ctx.reply(
+              `\u{1F4E6} <b>${escapeHtml(itemToEdit.smetaItemName)}</b>\n` +
+              `Miqdor: ${itemToEdit.requestedQty} ${itemToEdit.requestedUnit || 'dona'}\n\n` +
+              `Nima qilmoqchisiz?`,
+              { parse_mode: 'HTML', reply_markup: itemEditKb },
+            );
+
+            const itemActionCtx = await waitForCallbackOrCancel(conversation, ctx, /^req:(change_qty:\d+|delete_item:\d+|back_to_edit_list)$/, {
+              otherwise: (ctx) => ctx.reply('Iltimos, tugmalardan birini bosing.'),
+            });
+            try { await itemActionCtx.answerCallbackQuery(); } catch {}
+            const itemAction = itemActionCtx.callbackQuery!.data;
+
+            if (!itemAction || itemAction === 'req:back_to_edit_list') {
+              continue;
+            }
+
+            if (itemAction!.startsWith('req:delete_item:')) {
+              const deleteIndex = parseInt(itemAction!.split(':')[2], 10);
+              const deletedItem = extractedItems.splice(deleteIndex, 1)[0];
+              await ctx.reply(`"${deletedItem.smetaItemName}" o'chirildi.`);
+
+              if (extractedItems.length === 0) {
+                await ctx.reply('Barcha zayavkalar o\'chirildi.');
+                confirmationLoop = false;
+              }
+              continue;
+            }
+
+            if (itemAction!.startsWith('req:change_qty:')) {
+              const qtyIndex = parseInt(itemAction!.split(':')[2], 10);
+              await ctx.reply(`Yangi miqdorni kiriting (masalan: 50 dona):`);
+
+              const qtyCtx = await conversation.wait();
+              if (qtyCtx.message?.text && qtyCtx.message.text !== '/cancel') {
+                const match = qtyCtx.message.text.match(/(\d+)\s*(\w+)?/);
+                if (match) {
+                  extractedItems[qtyIndex].requestedQty = parseInt(match[1], 10);
+                  if (match[2]) extractedItems[qtyIndex].requestedUnit = match[2];
+                  await ctx.reply(`Miqdor yangilandi: ${extractedItems[qtyIndex].requestedQty} ${extractedItems[qtyIndex].requestedUnit || 'dona'}`);
+                }
+              }
+              continue;
+            }
+          }
+
+          if (action === 'req:confirm_all') {
+            // Save all requests
+            let savedCount = 0;
+            for (const item of extractedItems) {
+              // Find or create smeta item
+              const inputName = (item.smetaItemName || '').toLowerCase().trim();
+              let matched = smetaItemsList.data.find(
+                (si) => si.name.toLowerCase() === inputName ||
+                  si.name.toLowerCase().includes(inputName) ||
+                  inputName.includes(si.name.toLowerCase()),
+              );
+
+              if (!matched && smetaId) {
+                // Create new smeta item
+                matched = await conversation.external(() =>
+                  smetaItemsService.create(
+                    {
+                      smetaId: smetaId!,
+                      name: item.smetaItemName,
+                      category: 'Boshqa',
+                      unit: item.requestedUnit || 'dona',
+                      quantity: 0,
+                      unitPrice: 0,
+                      itemType: SmetaItemCategory.MATERIAL,
+                      source: DataSource.TELEGRAM,
+                    },
+                    user,
+                  ),
+                );
+                // Refresh smeta items list
+                smetaItemsList = await conversation.external(() =>
+                  smetaItemsService.findAll({ projectId, page: 1, limit: 100 }, user),
+                );
+              }
+
+              if (matched) {
+                const noteParts = [
+                  item.note,
+                  item.deadline ? `Kerak: ${item.deadline}` : '',
+                ].filter(Boolean);
+
+                await conversation.external(() =>
+                  requestsService.create(
+                    {
+                      smetaItemId: matched!.id,
+                      requestedQty: item.requestedQty,
+                      requestedAmount: 0,
+                      note: noteParts.join(' | ') || `${matched!.name} kerak`,
+                      source: DataSource.TELEGRAM,
+                    },
+                    user,
+                  ),
+                );
+                savedCount++;
+              }
+            }
+
+            if (savedCount > 0) {
+              await ctx.reply(`\u{2705} ${savedCount} ta zayavka yuborildi!`);
+            }
+            confirmationLoop = false;
+          }
+        }
+
+        // Ask if want to add more
+        const moreKb = new InlineKeyboard()
+          .text('\u{2795} Yana qo\'shish', 'req:more')
+          .text('\u{1F3E0} Menyu', 'req:done');
+
+        await ctx.reply('Yana zayavka qo\'shmoqchimisiz?', { reply_markup: moreKb });
+
+        const moreCtx = await waitForCallbackOrCancel(conversation, ctx, /^req:(more|done)$/, {
+          otherwise: (ctx) => ctx.reply('Iltimos, tugmalardan birini bosing.'),
+        });
+        try { await moreCtx.answerCallbackQuery(); } catch {}
+        continueAdding = moreCtx.callbackQuery!.data === 'req:more';
       }
     };
   }

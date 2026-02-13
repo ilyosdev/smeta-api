@@ -9,6 +9,9 @@ export enum RequestStatus {
   PENDING = 'PENDING',
   APPROVED = 'APPROVED',
   REJECTED = 'REJECTED',
+  IN_TRANSIT = 'IN_TRANSIT',
+  DELIVERED = 'DELIVERED',
+  RECEIVED = 'RECEIVED',
   FULFILLED = 'FULFILLED',
 }
 
@@ -24,6 +27,9 @@ export const purchaseRequests = mysqlTable('purchase_requests', {
     RequestStatus.PENDING,
     RequestStatus.APPROVED,
     RequestStatus.REJECTED,
+    RequestStatus.IN_TRANSIT,
+    RequestStatus.DELIVERED,
+    RequestStatus.RECEIVED,
     RequestStatus.FULFILLED,
   ]).default(RequestStatus.PENDING).notNull(),
   requestedById: varchar('requested_by_id', { length: 36 })
@@ -42,6 +48,33 @@ export const purchaseRequests = mysqlTable('purchase_requests', {
   proofPhotoFileId: varchar('proof_photo_file_id', { length: 255 }),
   fulfilledById: varchar('fulfilled_by_id', { length: 36 }).references(() => users.id),
   fulfilledAt: timestamp('fulfilled_at'),
+  // Driver assignment (set by SNABJENIYA when approving)
+  assignedDriverId: varchar('assigned_driver_id', { length: 36 }).references(() => users.id),
+  assignedAt: timestamp('assigned_at'),
+  approvedQty: double('approved_qty'),
+  approvedAmount: double('approved_amount'),
+  // Driver collection (set by HAYDOVCHI)
+  collectedQty: double('collected_qty'),
+  collectedAt: timestamp('collected_at'),
+  collectionNote: varchar('collection_note', { length: 1000 }),
+  collectionPhotoFileId: varchar('collection_photo_file_id', { length: 255 }),
+  // Driver delivery (set by HAYDOVCHI)
+  deliveredQty: double('delivered_qty'),
+  deliveredAt: timestamp('delivered_at'),
+  deliveryNote: varchar('delivery_note', { length: 1000 }),
+  deliveryPhotoFileId: varchar('delivery_photo_file_id', { length: 255 }),
+  // Warehouse receipt (set by SKLAD)
+  receivedQty: double('received_qty'),
+  receivedById: varchar('received_by_id', { length: 36 }).references(() => users.id),
+  receivedAt: timestamp('received_at'),
+  receiptNote: varchar('receipt_note', { length: 1000 }),
+  receiptPhotoFileId: varchar('receipt_photo_file_id', { length: 255 }),
+  // Moderator finalization (set by MODERATOR - final price entry)
+  finalAmount: double('final_amount'),
+  finalUnitPrice: double('final_unit_price'),
+  finalizedById: varchar('finalized_by_id', { length: 36 }).references(() => users.id),
+  finalizedAt: timestamp('finalized_at'),
+  finalizationNote: varchar('finalization_note', { length: 1000 }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at')
     .defaultNow()
@@ -68,6 +101,21 @@ export const purchaseRequestsRelations = relations(purchaseRequests, ({ one }) =
     fields: [purchaseRequests.fulfilledById],
     references: [users.id],
     relationName: 'fulfilledBy',
+  }),
+  assignedDriver: one(users, {
+    fields: [purchaseRequests.assignedDriverId],
+    references: [users.id],
+    relationName: 'assignedDriver',
+  }),
+  receivedBy: one(users, {
+    fields: [purchaseRequests.receivedById],
+    references: [users.id],
+    relationName: 'receivedBy',
+  }),
+  finalizedBy: one(users, {
+    fields: [purchaseRequests.finalizedById],
+    references: [users.id],
+    relationName: 'finalizedBy',
   }),
 }));
 

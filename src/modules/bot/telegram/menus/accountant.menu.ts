@@ -7,7 +7,7 @@ import { VendorExpensesService } from 'src/modules/vendor/expenses/vendor-expens
 import { VendorCashRegistersService } from 'src/modules/vendor/cash-registers/vendor-cash-registers.service';
 import { VendorCashRequestsService } from 'src/modules/vendor/cash-requests/vendor-cash-requests.service';
 import { AiService } from 'src/modules/bot/ai/ai.service';
-import { RequestStatus } from 'src/common/database/schemas';
+import { CashRequestStatus } from 'src/common/database/schemas';
 import { PaymentType } from 'src/common/database/schemas/incomes';
 import { ExpenseCategory } from 'src/common/database/schemas/expenses';
 import { DataSource } from 'src/common/database/schemas/smeta-items';
@@ -40,7 +40,16 @@ export class AccountantMenu {
       createConversation(this.buildIncomeConversation(), 'income'),
       createConversation(this.buildExpenseConversation(), 'expense'),
       createConversation(this.buildZayavkaConversation(), 'acc_cash_request'),
+      createConversation(this.buildFillBalanceConversation(), 'fill_balance'),
     ];
+  }
+
+  async handleFillBalance(ctx: BotContext): Promise<void> {
+    if (!ctx.session?.selectedProjectId) {
+      await ctx.reply('Avval loyihani tanlang: /projects');
+      return;
+    }
+    await ctx.conversation.enter('fill_balance');
   }
 
   async handleIncome(ctx: BotContext): Promise<void> {
@@ -67,7 +76,7 @@ export class AccountantMenu {
     try {
       const user = sessionToUser(ctx.session, ctx.from!.id);
       const requests = await this.cashRequestsService.findAll(
-        { projectId: ctx.session.selectedProjectId, status: RequestStatus.PENDING, page: 1, limit: 10 },
+        { projectId: ctx.session.selectedProjectId, status: CashRequestStatus.PENDING, page: 1, limit: 10 },
         user,
       );
 
@@ -263,6 +272,66 @@ export class AccountantMenu {
         await ctx.reply('Zayavka muvaffaqiyatli yuborildi! \u{2705}');
       } catch {
         await ctx.reply('Zayavkani saqlashda xatolik yuz berdi. \u{274C}');
+      }
+    };
+  }
+
+  private buildFillBalanceConversation() {
+    const cashRegistersService = this.cashRegistersService;
+    const logger = this.logger;
+
+    return async function fillBalance(
+      conversation: BotConversation,
+      ctx: BotContext,
+    ) {
+      const projectId = await conversation.external((ctx) => ctx.session?.selectedProjectId);
+      const projectName = await conversation.external((ctx) => ctx.session?.selectedProjectName || '');
+      if (!projectId) {
+        await ctx.reply('Avval loyihani tanlang: /projects');
+        return;
+      }
+
+      await ctx.reply(
+        `\u{1F4B3} <b>BALANS TO'LDIRISH</b>\n` +
+        `\u{1F3D7}\u{FE0F} ${projectName}\n\n` +
+        `Summani kiriting (so'm):\n` +
+        `Masalan: <code>50,000,000</code>\n\n` +
+        `<i>/cancel - bekor qilish</i>`,
+        { parse_mode: 'HTML' },
+      );
+
+      let amount: number;
+      for (;;) {
+        const raw = await conversation.form.text();
+        if (raw.toLowerCase() === '/cancel') {
+          await ctx.reply('Bekor qilindi.');
+          return;
+        }
+        const parsed = parseFloat(raw.replace(/[\s,_]/g, ''));
+        if (isNaN(parsed) || parsed <= 0) {
+          await ctx.reply('Noto\'g\'ri summa. Qaytadan kiriting:');
+          continue;
+        }
+        amount = parsed;
+        break;
+      }
+
+      try {
+        const user = await conversation.external((ctx) => sessionToUser(ctx.session, ctx.from!.id));
+
+        // Add to balance via cash register service
+        await conversation.external(() =>
+          cashRegistersService.addToBalance(projectId, amount, user),
+        );
+
+        await ctx.reply(
+          `\u{2705} Balans to'ldirildi!\n` +
+          `Summa: <b>${amount.toLocaleString('uz-UZ')} so'm</b>`,
+          { parse_mode: 'HTML' },
+        );
+      } catch (error) {
+        logger.error('Fill balance error', error);
+        await ctx.reply('Balansni to\'ldirishda xatolik yuz berdi. \u{274C}');
       }
     };
   }

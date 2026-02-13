@@ -13,6 +13,8 @@ export enum UserRole {
   SNABJENIYA = 'SNABJENIYA',
   SKLAD = 'SKLAD',
   PRORAB = 'PRORAB',
+  HAYDOVCHI = 'HAYDOVCHI',
+  MODERATOR = 'MODERATOR',
   WORKER = 'WORKER',
   POSTAVSHIK = 'POSTAVSHIK',
 }
@@ -27,6 +29,8 @@ export const userRoleEnum = mysqlEnum('role', [
   UserRole.SNABJENIYA,
   UserRole.SKLAD,
   UserRole.PRORAB,
+  UserRole.HAYDOVCHI,
+  UserRole.MODERATOR,
   UserRole.WORKER,
   UserRole.POSTAVSHIK,
 ]);
@@ -51,6 +55,8 @@ export const users = mysqlTable('users', {
     UserRole.SNABJENIYA,
     UserRole.SKLAD,
     UserRole.PRORAB,
+    UserRole.HAYDOVCHI,
+    UserRole.MODERATOR,
     UserRole.WORKER,
     UserRole.POSTAVSHIK,
   ]).default(UserRole.PRORAB).notNull(),

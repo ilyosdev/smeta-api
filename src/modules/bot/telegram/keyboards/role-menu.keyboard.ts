@@ -12,6 +12,8 @@ export const ALL_TESTABLE_ROLES: UserRole[] = [
   UserRole.SNABJENIYA,
   UserRole.SKLAD,
   UserRole.PRORAB,
+  UserRole.HAYDOVCHI,
+  UserRole.MODERATOR,
   UserRole.WORKER,
   UserRole.POSTAVSHIK,
 ];
@@ -34,6 +36,10 @@ export function buildMainMenu(role: UserRole): InlineKeyboard {
       return buildWarehouseMenu();
     case UserRole.PRORAB:
       return buildForemanMenu();
+    case UserRole.HAYDOVCHI:
+      return buildDriverMenu();
+    case UserRole.MODERATOR:
+      return buildModeratorMenu();
     case UserRole.PTO:
       return buildPtoMenu();
     case UserRole.WORKER:
@@ -71,6 +77,7 @@ function buildBossMenu(): InlineKeyboard {
 
 function buildAccountantMenu(): InlineKeyboard {
   return new InlineKeyboard()
+    .text('💳 Balans to\'ldirish', 'acc:fill_balance').row()
     .text('💰 Kirim', 'acc:income').row()
     .text('📋 Zayavkalar', 'acc:requests').row()
     .text('💵 Kassa', 'kassa:menu').row()
@@ -79,14 +86,15 @@ function buildAccountantMenu(): InlineKeyboard {
 
 function buildSupplyMenu(): InlineKeyboard {
   return new InlineKeyboard()
-    .text('📦 Buyurtma berish', 'supply:new_order').row()
-    .text('💰 Qarz to\'lash', 'supply:debt_menu').row()
+    .text('📦 Buyurtmalar', 'supply:orders_menu').row()
+    .text('💰 Qarzlar', 'supply:debt_menu').row()
     .text('💵 Koshelok', 'kassa:menu').row()
     .text('🔄 Loyihani almashtirish', 'switch_project');
 }
 
 function buildWarehouseMenu(): InlineKeyboard {
   return new InlineKeyboard()
+    .text('🚚 Kutilayotgan yetkazmalar', 'wh:pending_deliveries').row()
     .text('➕ Mahsulot qo\'shish', 'wh:add').row()
     .text('➖ Mahsulot chiqim', 'wh:remove').row()
     .text('🔄 Ko\'chirish', 'wh:transfer').row()
@@ -100,6 +108,23 @@ function buildForemanMenu(): InlineKeyboard {
     .text('📦 Zayavka', 'foreman:request_menu').row()
     .text('💵 Koshelok', 'kassa:menu').row()
     .text('👷 Ustalar', 'foreman:workers').row()
+    .text('🔄 Loyihani almashtirish', 'switch_project');
+}
+
+function buildDriverMenu(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text('📦 Tayinlangan zayavkalar', 'driver:assigned').row()
+    .text('🚚 Faol yetkazma', 'driver:active').row()
+    .text('📋 Yetkazma tarixi', 'driver:history').row()
+    .text('💵 Kassa', 'kassa:menu').row()
+    .text('🔄 Loyihani almashtirish', 'switch_project');
+}
+
+function buildModeratorMenu(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text('📦 Mahsulot kiritish', 'mod:pending').row()
+    .text('📋 Tarix', 'mod:history').row()
+    .text('💵 Kassa', 'kassa:menu').row()
     .text('🔄 Loyihani almashtirish', 'switch_project');
 }
 
@@ -146,6 +171,8 @@ export function getRoleLabel(role: UserRole): string {
     [UserRole.SNABJENIYA]: 'Snabjeniya',
     [UserRole.SKLAD]: 'Sklad',
     [UserRole.PRORAB]: 'Prorab',
+    [UserRole.HAYDOVCHI]: 'Haydovchi',
+    [UserRole.MODERATOR]: 'Moderator',
     [UserRole.WORKER]: 'Ishchi',
     [UserRole.POSTAVSHIK]: 'Postavshik',
   };

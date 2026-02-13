@@ -7,7 +7,7 @@ import { VendorWarehousesService } from 'src/modules/vendor/warehouses/vendor-wa
 import { VendorRequestsService } from 'src/modules/vendor/requests/vendor-requests.service';
 import { VendorCashRequestsService } from 'src/modules/vendor/cash-requests/vendor-cash-requests.service';
 import { VendorSuppliersService } from 'src/modules/vendor/suppliers/vendor-suppliers.service';
-import { RequestStatus } from 'src/common/database/schemas';
+import { RequestStatus, CashRequestStatus } from 'src/common/database/schemas';
 
 import { BotContext } from '../types/context';
 import { sessionToUser } from '../helpers/session-to-user';
@@ -307,7 +307,7 @@ export class BossMenu {
 
       // Pending cash requests
       const pendingCash = await this.cashRequestsService.findAll(
-        { projectId, status: RequestStatus.PENDING, page: 1, limit: 10 },
+        { projectId, status: CashRequestStatus.PENDING, page: 1, limit: 10 },
         user,
       );
 

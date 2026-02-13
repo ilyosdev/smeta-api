@@ -12,4 +12,14 @@ export interface SessionData {
   dirPendingApproveId?: string;
   /** Tester has explicitly confirmed their role */
   testerRoleConfirmed?: boolean;
+  /** Driver: pending request ID for collect conversation */
+  pendingCollectRequestId?: string;
+  /** Driver: pending request ID for deliver conversation */
+  pendingDeliverRequestId?: string;
+  /** Supply: pending request ID for approve conversation */
+  pendingApproveRequestId?: string;
+  /** Warehouse: pending request ID for receive conversation */
+  pendingReceiveRequestId?: string;
+  /** Moderator: pending request ID for finalize conversation */
+  pendingFinalizeRequestId?: string;
 }

@@ -349,8 +349,7 @@ export class KassaMenu {
 
         await ctx.reply(
           `Rasxod kiritildi: ${formatMoneyFull(amount)} ✅\n` +
-          (recipient ? `Kimga: ${escapeHtml(recipient)}\n` : '') +
-          'Boss tasdiqlashini kutmoqda.',
+          (recipient ? `Kimga: ${escapeHtml(recipient)}` : ''),
           { parse_mode: 'HTML' },
         );
       } catch {

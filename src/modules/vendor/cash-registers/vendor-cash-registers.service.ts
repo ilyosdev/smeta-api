@@ -119,4 +119,39 @@ export class VendorCashRegistersService {
 
     return this.findOneCashRegister(cashRegister.id, user);
   }
+
+  async addToBalance(projectId: string, amount: number, user: IUser): Promise<CashRegisterWithRelations> {
+    // Find existing cash register for this project or create one
+    let cashRegister = await this.repository.findCashRegisterByProjectId(projectId);
+
+    if (!cashRegister) {
+      // Create a cash register for the project
+      const newCashRegister = await this.repository.createCashRegister({
+        userId: user.id,
+        projectId,
+        name: 'Loyiha kassasi',
+      });
+      cashRegister = await this.repository.findCashRegisterById(newCashRegister.id, user.orgId);
+    }
+
+    if (!cashRegister) {
+      HandledException.throw('CASH_REGISTER_NOT_FOUND', 404);
+    }
+
+    // Create an IN transaction
+    await this.repository.createCashTransaction({
+      cashRegisterId: cashRegister.id,
+      type: CashTransactionType.IN,
+      amount,
+      note: 'Balans to\'ldirish',
+    });
+
+    // Update the balance
+    await this.repository.updateCashRegister(cashRegister.id, {
+      balance: cashRegister.balance + amount,
+      totalIn: cashRegister.totalIn + amount,
+    });
+
+    return this.findOneCashRegister(cashRegister.id, user);
+  }
 }

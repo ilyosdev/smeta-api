@@ -28,6 +28,8 @@ import { SuperAdminMenu } from './menus/super-admin.menu';
 import { OperatorMenu } from './menus/operator.menu';
 import { WorkerMenu } from './menus/worker.menu';
 import { SupplierMenu } from './menus/supplier.menu';
+import { DriverMenu } from './menus/driver.menu';
+import { ModeratorMenu } from './menus/moderator.menu';
 
 @Injectable()
 export class TelegramService implements OnModuleInit, OnModuleDestroy {
@@ -52,6 +54,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     private readonly operatorMenu: OperatorMenu,
     private readonly workerMenu: WorkerMenu,
     private readonly supplierMenu: SupplierMenu,
+    private readonly driverMenu: DriverMenu,
+    private readonly moderatorMenu: ModeratorMenu,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -204,6 +208,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     for (const mw of this.operatorMenu.getConversationMiddleware()) {
       this.bot.use(mw);
     }
+    for (const mw of this.driverMenu.getConversationMiddleware()) {
+      this.bot.use(mw);
+    }
+    for (const mw of this.moderatorMenu.getConversationMiddleware()) {
+      this.bot.use(mw);
+    }
 
     this.bot.catch((err) => {
       this.logger.error(`Bot error: ${err.message}`, err.error);
@@ -240,8 +250,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     });
 
     // Centralized auth + project guard for all role-specific callbacks
-    const projectPrefixes = /^(boss|acc|supply|wh|foreman|pto|dir|exp|kassa):/;
-    const authPrefixes = /^(boss|acc|supply|wh|foreman|pto|dir|exp|kassa|sa|op|worker|supplier|tester):/;
+    const projectPrefixes = /^(boss|acc|supply|wh|foreman|pto|dir|exp|kassa|driver|mod):/;
+    const authPrefixes = /^(boss|acc|supply|wh|foreman|pto|dir|exp|kassa|sa|op|worker|supplier|tester|driver|mod):/;
 
     this.bot.on('callback_query:data', async (ctx, next) => {
       const data = ctx.callbackQuery.data;
@@ -263,6 +273,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     // /start command
     this.bot.command('start', (ctx) => this.startHandler.handleStart(ctx));
+
+    // Contact shared (phone-based auth)
+    this.bot.on('message:contact', (ctx) => this.startHandler.handleContact(ctx));
 
     // Project selection callback
     this.bot.callbackQuery(/^project:/, async (ctx) => {
@@ -470,6 +483,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     });
 
     // Accountant menu callbacks
+    this.bot.callbackQuery('acc:fill_balance', async (ctx) => {
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.accountantMenu.handleFillBalance(ctx);
+    });
     this.bot.callbackQuery('acc:income', async (ctx) => {
       try { await ctx.answerCallbackQuery(); } catch {}
       await this.accountantMenu.handleIncome(ctx);
@@ -494,9 +511,26 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     });
 
     // Supply menu callbacks
+    this.bot.callbackQuery('supply:orders_menu', async (ctx) => {
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.supplyMenu.handleOrdersMenu(ctx);
+    });
+    this.bot.callbackQuery('supply:requests', async (ctx) => {
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.supplyMenu.handleRequests(ctx);
+    });
+    this.bot.callbackQuery(/^supply:approve:/, async (ctx) => {
+      const requestId = ctx.callbackQuery.data.split(':')[2];
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.supplyMenu.handleApproveRequest(ctx, requestId);
+    });
     this.bot.callbackQuery('supply:new_order', async (ctx) => {
       try { await ctx.answerCallbackQuery(); } catch {}
       await this.supplyMenu.handleNewOrder(ctx);
+    });
+    this.bot.callbackQuery('supply:orders', async (ctx) => {
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.supplyMenu.handleOrders(ctx);
     });
     this.bot.callbackQuery('supply:debt_menu', async (ctx) => {
       try { await ctx.answerCallbackQuery(); } catch {}
@@ -543,6 +577,54 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     this.bot.callbackQuery('wh:inventory', async (ctx) => {
       try { await ctx.answerCallbackQuery(); } catch {}
       await this.warehouseMenu.handleInventory(ctx);
+    });
+    this.bot.callbackQuery('wh:pending_deliveries', async (ctx) => {
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.warehouseMenu.handlePendingDeliveries(ctx);
+    });
+    this.bot.callbackQuery(/^wh:receive:/, async (ctx) => {
+      const requestId = ctx.callbackQuery.data.split(':')[2];
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.warehouseMenu.handleReceiveDelivery(ctx, requestId);
+    });
+
+    // Driver menu callbacks
+    this.bot.callbackQuery('driver:assigned', async (ctx) => {
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.driverMenu.handleAssignedRequests(ctx);
+    });
+    this.bot.callbackQuery('driver:active', async (ctx) => {
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.driverMenu.handleActiveDeliveries(ctx);
+    });
+    this.bot.callbackQuery('driver:history', async (ctx) => {
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.driverMenu.handleDeliveryHistory(ctx);
+    });
+    this.bot.callbackQuery(/^driver:collect:/, async (ctx) => {
+      const requestId = ctx.callbackQuery.data.split(':')[2];
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.driverMenu.handleCollect(ctx, requestId);
+    });
+    this.bot.callbackQuery(/^driver:deliver:/, async (ctx) => {
+      const requestId = ctx.callbackQuery.data.split(':')[2];
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.driverMenu.handleDeliver(ctx, requestId);
+    });
+
+    // Moderator menu callbacks
+    this.bot.callbackQuery('mod:pending', async (ctx) => {
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.moderatorMenu.handlePendingFinalization(ctx);
+    });
+    this.bot.callbackQuery('mod:history', async (ctx) => {
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.moderatorMenu.handleHistory(ctx);
+    });
+    this.bot.callbackQuery(/^mod:finalize:/, async (ctx) => {
+      const requestId = ctx.callbackQuery.data.split(':')[2];
+      try { await ctx.answerCallbackQuery(); } catch {}
+      await this.moderatorMenu.handleFinalize(ctx, requestId);
     });
 
     // Foreman menu callbacks

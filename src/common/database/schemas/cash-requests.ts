@@ -3,8 +3,14 @@ import { double, mysqlEnum, mysqlTable, text, timestamp, varchar } from 'drizzle
 import { randomUUID } from 'crypto';
 import { users } from './users';
 import { projects } from './projects';
-import { RequestStatus } from './purchase-requests';
 import { DataSource } from './smeta-items';
+
+export enum CashRequestStatus {
+  PENDING = 'PENDING',
+  APPROVED = 'APPROVED',
+  REJECTED = 'REJECTED',
+  FULFILLED = 'FULFILLED',
+}
 
 export const cashRequests = mysqlTable('cash_requests', {
   id: varchar('id', { length: 36 }).primaryKey().$defaultFn(() => randomUUID()),
@@ -18,11 +24,11 @@ export const cashRequests = mysqlTable('cash_requests', {
   reason: text('reason'),
   neededBy: timestamp('needed_by'),
   status: mysqlEnum('status', [
-    RequestStatus.PENDING,
-    RequestStatus.APPROVED,
-    RequestStatus.REJECTED,
-    RequestStatus.FULFILLED,
-  ]).default(RequestStatus.PENDING).notNull(),
+    CashRequestStatus.PENDING,
+    CashRequestStatus.APPROVED,
+    CashRequestStatus.REJECTED,
+    CashRequestStatus.FULFILLED,
+  ]).default(CashRequestStatus.PENDING).notNull(),
   approvedById: varchar('approved_by_id', { length: 36 }).references(() => users.id),
   approvedAt: timestamp('approved_at'),
   rejectionReason: varchar('rejection_reason', { length: 1000 }),

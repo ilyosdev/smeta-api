@@ -214,12 +214,13 @@ export const SUPPLY_ORDER_FORM: FormConfig = {
   formType: 'supply_order',
   title: 'BUYURTMA BERISH',
   emoji: '\u{1F4E6}',
-  exampleMessage: 'Masalan: "Karimov LLC, sement, 100, qop"',
+  exampleMessage: 'Masalan: "Karimov LLC, sement, 100, qop, 5000000"',
   fields: [
     { key: 'supplierName', label: 'Postavshik nomi', required: true, type: 'string' },
     { key: 'product', label: 'Mahsulot nomi', required: true, type: 'string' },
     { key: 'quantity', label: 'Miqdor', required: true, type: 'number', format: 'plain' },
     { key: 'unit', label: "O'lchov birligi (dona, kg, metr, m\u00B2, m\u00B3, tonna)", required: true, type: 'string' },
+    { key: 'summa', label: 'Summa (so\'m)', required: true, type: 'number', format: 'money' },
   ],
   confirmPrefix: 'supply_order',
 };

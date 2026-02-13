@@ -2,7 +2,7 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsEnum, IsInt, IsOptional, IsUUID, Min } from 'class-validator';
 
-import { RequestStatus } from 'src/common/database/schemas';
+import { CashRequestStatus } from 'src/common/database/schemas';
 
 export class QueryCashRequestDto {
   @ApiPropertyOptional()
@@ -19,10 +19,10 @@ export class QueryCashRequestDto {
   @IsOptional()
   limit?: number;
 
-  @ApiPropertyOptional({ enum: RequestStatus })
-  @IsEnum(RequestStatus)
+  @ApiPropertyOptional({ enum: CashRequestStatus })
+  @IsEnum(CashRequestStatus)
   @IsOptional()
-  status?: RequestStatus;
+  status?: CashRequestStatus;
 
   @ApiPropertyOptional()
   @IsUUID()

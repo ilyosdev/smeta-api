@@ -5,13 +5,16 @@ import { createConversation } from '@grammyjs/conversations';
 import { VendorSuppliersService } from 'src/modules/vendor/suppliers/vendor-suppliers.service';
 import { VendorCashRegistersService } from 'src/modules/vendor/cash-registers/vendor-cash-registers.service';
 import { VendorExpensesService } from 'src/modules/vendor/expenses/vendor-expenses.service';
+import { VendorRequestsService } from 'src/modules/vendor/requests/vendor-requests.service';
 import { AiService } from 'src/modules/bot/ai/ai.service';
-import { CashTransactionType, PaymentType, ExpenseCategory } from 'src/common/database/schemas';
+import { CashTransactionType, PaymentType, ExpenseCategory, RequestStatus } from 'src/common/database/schemas';
+import { buildConfirmationKeyboard } from '../keyboards/confirmation.keyboard';
+import { parseNumber } from '../helpers/format';
 
 import { BotContext, BotConversation } from '../types/context';
 import { sessionToUser } from '../helpers/session-to-user';
 import { formatMoneyFull, escapeHtml } from '../helpers/format';
-import { replyCancelWithMenu, waitForCallbackOrCancel } from '../helpers/cancel';
+import { replyCancelWithMenu, waitForCallbackOrCancel, textWithCancel } from '../helpers/cancel';
 import { runSingleMessageFlow } from '../helpers/single-message-flow';
 import { SUPPLY_ORDER_FORM } from '../helpers/form-configs';
 import { searchAndSelectEntity } from '../helpers/name-search';
@@ -25,6 +28,7 @@ export class SupplyMenu {
     private readonly cashRegistersService: VendorCashRegistersService,
     private readonly aiService: AiService,
     private readonly expensesService: VendorExpensesService,
+    private readonly requestsService: VendorRequestsService,
   ) {}
 
   getConversationMiddleware() {
@@ -32,6 +36,7 @@ export class SupplyMenu {
       createConversation(this.buildOrderConversation(), 'supply_order'),
       createConversation(this.buildPayDebtConversation(), 'supply_pay_debt'),
       createConversation(this.buildDebtHistoryConversation(), 'supply_debt_history'),
+      createConversation(this.buildApproveRequestConversation(), 'supply_approve_request'),
     ];
   }
 
@@ -50,12 +55,157 @@ export class SupplyMenu {
     }
   }
 
+  async handleOrdersMenu(ctx: BotContext): Promise<void> {
+    const projectName = ctx.session?.selectedProjectName || '';
+    const text = `📦 <b>BUYURTMALAR</b>\n🏗️ ${escapeHtml(projectName)}`;
+
+    const keyboard = new InlineKeyboard()
+      .text('📋 Zayavkalar (Prorabdan)', 'supply:requests').row()
+      .text('➕ Yangi buyurtma', 'supply:new_order').row()
+      .text('📜 Buyurtmalar tarixi', 'supply:orders').row()
+      .text('🔙 Menyu', 'main_menu');
+
+    if (ctx.callbackQuery) {
+      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
+    } else {
+      await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
+    }
+  }
+
   async handleNewOrder(ctx: BotContext): Promise<void> {
     if (!ctx.session?.selectedProjectId) {
       await ctx.reply('Avval loyihani tanlang.');
       return;
     }
     await ctx.conversation.enter('supply_order');
+  }
+
+  async handleRequests(ctx: BotContext): Promise<void> {
+    try {
+      if (!ctx.session?.userId) {
+        await ctx.reply('Avval tizimga kiring: /start');
+        return;
+      }
+      const user = sessionToUser(ctx.session, ctx.from!.id);
+      const projectId = ctx.session?.selectedProjectId;
+
+      // Fetch pending requests from Prorab
+      const result = await this.requestsService.findAll(
+        { projectId, status: RequestStatus.PENDING, page: 1, limit: 20 },
+        user,
+      );
+
+      let text = `📋 <b>ZAYAVKALAR (Prorablardan)</b>\n🏗️ ${escapeHtml(ctx.session?.selectedProjectName || '')}\n\n`;
+
+      if (result.data.length === 0) {
+        text += `Zayavkalar yo'q.`;
+      } else {
+        for (let i = 0; i < result.data.length; i++) {
+          const req = result.data[i];
+          const statusIcon = req.status === 'PENDING' ? '🟡' : req.status === 'APPROVED' ? '✅' : '❌';
+          text += `${statusIcon} <b>${escapeHtml(req.smetaItem?.name || 'Noma\'lum')}</b>\n`;
+          text += `   📦 Miqdor: ${req.requestedQty} ${req.smetaItem?.unit || ''}\n`;
+          if (req.requestedBy?.name) {
+            text += `   👷 ${escapeHtml(req.requestedBy.name)}\n`;
+          }
+          if (req.note) {
+            text += `   📝 ${escapeHtml(req.note)}\n`;
+          }
+          text += `   📅 ${new Date(req.createdAt).toLocaleDateString('uz-UZ')}\n\n`;
+        }
+        if (result.total > 20) {
+          text += `... jami ${result.total} ta zayavka`;
+        }
+      }
+
+      const keyboard = new InlineKeyboard();
+      // Add approve buttons for each pending request
+      for (const req of result.data.slice(0, 10)) {
+        keyboard.text(
+          `✅ ${(req.smetaItem?.name || 'Noma\'lum').slice(0, 20)}`,
+          `supply:approve:${req.id}`,
+        ).row();
+      }
+      keyboard.text('🔙 Menyu', 'main_menu');
+
+      if (ctx.callbackQuery) {
+        await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
+      } else {
+        await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
+      }
+    } catch (error) {
+      this.logger.error('Requests list error', error);
+      await ctx.reply('Zayavkalarni yuklashda xatolik yuz berdi.');
+    }
+  }
+
+  /**
+   * Start approve request conversation
+   */
+  async handleApproveRequest(ctx: BotContext, requestId: string): Promise<void> {
+    if (!ctx.session) {
+      await ctx.reply('Avval tizimga kiring: /start');
+      return;
+    }
+    ctx.session.pendingApproveRequestId = requestId;
+    await ctx.conversation.enter('supply_approve_request');
+  }
+
+  async handleOrders(ctx: BotContext): Promise<void> {
+    try {
+      if (!ctx.session?.userId) {
+        await ctx.reply('Avval tizimga kiring: /start');
+        return;
+      }
+      const user = sessionToUser(ctx.session, ctx.from!.id);
+      const projectId = ctx.session?.selectedProjectId;
+
+      // Fetch orders for current project
+      const result = await this.suppliersService.findAllSupplyOrders(
+        { projectId, page: 1, limit: 20 },
+        user,
+      );
+
+      let text = `📋 <b>BUYURTMALAR</b>\n🏗️ ${escapeHtml(ctx.session?.selectedProjectName || '')}\n\n`;
+
+      if (result.data.length === 0) {
+        text += `Buyurtmalar yo'q.`;
+      } else {
+        for (const order of result.data) {
+          const statusIcon = order.status === 'ORDERED' ? '🟡' : order.status === 'DELIVERED' ? '✅' : order.status === 'PARTIAL' ? '🟠' : '❌';
+          text += `${statusIcon} <b>${escapeHtml(order.supplier?.name || 'Noma\'lum')}</b>\n`;
+          if (order.items && order.items.length > 0) {
+            for (const item of order.items) {
+              text += `   • ${escapeHtml(item.name)} - ${item.quantity} ${item.unit}`;
+              if (item.unitPrice > 0) {
+                text += ` (${formatMoneyFull(item.totalCost)})`;
+              }
+              text += '\n';
+            }
+          }
+          if (order.note) {
+            text += `   📝 ${escapeHtml(order.note)}\n`;
+          }
+          text += `   📅 ${new Date(order.createdAt).toLocaleDateString('uz-UZ')}\n\n`;
+        }
+        if (result.total > 20) {
+          text += `... jami ${result.total} ta buyurtma`;
+        }
+      }
+
+      const keyboard = new InlineKeyboard()
+        .text('📦 Yangi buyurtma', 'supply:new_order').row()
+        .text('🔙 Menyu', 'main_menu');
+
+      if (ctx.callbackQuery) {
+        await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
+      } else {
+        await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
+      }
+    } catch (error) {
+      this.logger.error('Orders list error', error);
+      await ctx.reply('Buyurtmalarni yuklashda xatolik yuz berdi.');
+    }
   }
 
   async handlePayDebt(ctx: BotContext): Promise<void> {
@@ -162,6 +312,7 @@ export class SupplyMenu {
       const product: string = result.data.product;
       const quantity: number = result.data.quantity || 1;
       const unit: string = result.data.unit || 'dona';
+      const summa: number = result.data.summa || 0;
 
       // Find or create supplier
       let supplierId: string;
@@ -199,22 +350,38 @@ export class SupplyMenu {
       }
 
       try {
-        // Create supply order (no price — just product + quantity)
-        await conversation.external(() =>
+        // Create supply order with price
+        const unitPrice = quantity > 0 ? summa / quantity : summa;
+        const order = await conversation.external(() =>
           suppliersService.createSupplyOrder(
             {
               supplierId,
               projectId,
-              items: [{ name: product, unit, quantity, unitPrice: 0 }],
+              items: [{ name: product, unit, quantity, unitPrice }],
               note: `${product} ${quantity} ${unit}`,
             },
             user,
           ),
         );
 
-        await ctx.reply('Buyurtma muvaffaqiyatli yaratildi! \u{2705}');
+        // Create debt for this order
+        if (summa > 0) {
+          await conversation.external(() =>
+            suppliersService.createSupplierDebt(
+              {
+                supplierId,
+                amount: summa,
+                reason: `${product} ${quantity} ${unit}`,
+                orderId: order.id,
+              },
+              user,
+            ),
+          );
+        }
+
+        await ctx.reply('Buyurtma muvaffaqiyatli yaratildi! ✅\nQarzga qo\'shildi: ' + formatMoneyFull(summa));
       } catch {
-        await ctx.reply('Buyurtmani saqlashda xatolik yuz berdi. \u{274C}');
+        await ctx.reply('Buyurtmani saqlashda xatolik yuz berdi. ❌');
       }
     };
   }
@@ -417,6 +584,135 @@ export class SupplyMenu {
         .text('\u{1F519} Menyu', 'main_menu');
 
       await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
+    };
+  }
+
+  private buildApproveRequestConversation() {
+    const requestsService = this.requestsService;
+
+    return async function supplyApproveRequest(
+      conversation: BotConversation,
+      ctx: BotContext,
+    ) {
+      const requestId = await conversation.external((ctx) => ctx.session?.pendingApproveRequestId);
+      if (!requestId) {
+        await ctx.reply('Zayavka topilmadi. Qaytadan urinib ko\'ring.');
+        return;
+      }
+
+      const user = await conversation.external((ctx) =>
+        sessionToUser(ctx.session, ctx.from!.id),
+      );
+
+      // Fetch the request
+      const request = await conversation.external(() =>
+        requestsService.findOne(requestId, user),
+      );
+
+      if (!request) {
+        await ctx.reply('Zayavka topilmadi. ❌');
+        return;
+      }
+
+      if (request.status !== RequestStatus.PENDING) {
+        await ctx.reply('Bu zayavka allaqachon tasdiqlangan yoki bekor qilingan. ❌');
+        return;
+      }
+
+      // Show request details
+      await ctx.reply(
+        `✅ <b>ZAYAVKANI TASDIQLASH</b>\n\n` +
+        `📦 ${escapeHtml(request.smetaItem?.name || 'Noma\'lum')}\n` +
+        `📊 So'ralgan miqdor: ${request.requestedQty} ${request.smetaItem?.unit || ''}\n` +
+        `💰 Smeta narxi: ${formatMoneyFull(request.requestedAmount)}\n` +
+        `👷 Prorab: ${escapeHtml(request.requestedBy?.name || '')}\n\n` +
+        `Tasdiqlangan miqdorni kiriting:\n\n<i>/cancel - bekor qilish</i>`,
+        { parse_mode: 'HTML' },
+      );
+
+      // Get approved quantity
+      let approvedQty: number;
+      for (;;) {
+        const raw = await textWithCancel(conversation, ctx);
+        approvedQty = parseNumber(raw);
+        if (!isNaN(approvedQty) && approvedQty >= 0) break;
+        await ctx.reply('Iltimos, to\'g\'ri raqam kiriting (masalan: 500 yoki 500,000):');
+      }
+
+      // Get price (narx)
+      await ctx.reply('Narxni kiriting (jami summa):\n\n<i>/cancel - bekor qilish</i>', { parse_mode: 'HTML' });
+      let approvedAmount: number;
+      for (;;) {
+        const raw = await textWithCancel(conversation, ctx);
+        approvedAmount = parseNumber(raw);
+        if (!isNaN(approvedAmount) && approvedAmount >= 0) break;
+        await ctx.reply('Iltimos, to\'g\'ri raqam kiriting (masalan: 5000000 yoki 5,000,000):');
+      }
+
+      // Get available drivers
+      const drivers = await conversation.external(() =>
+        requestsService.getAvailableDrivers(user),
+      );
+
+      if (drivers.length === 0) {
+        await ctx.reply('Haydovchilar topilmadi. Avval haydovchi qo\'shing. ❌');
+        return;
+      }
+
+      // Select driver
+      const driverKb = new InlineKeyboard();
+      for (const driver of drivers.slice(0, 10)) {
+        driverKb.text(`🚚 ${driver.name}`, `seldrv:${driver.id}`).row();
+      }
+      driverKb.text('❌ Bekor qilish', 'conv:cancel');
+
+      await ctx.reply('Haydovchini tanlang:', { reply_markup: driverKb });
+
+      const driverCtx = await waitForCallbackOrCancel(conversation, ctx, /^seldrv:/, {
+        otherwise: (ctx) => ctx.reply('Iltimos, haydovchini tanlang.'),
+      });
+      try { await driverCtx.answerCallbackQuery(); } catch {}
+      const driverId = driverCtx.callbackQuery!.data!.split(':')[1];
+      const selectedDriver = drivers.find((d) => d.id === driverId);
+
+      // Show confirmation
+      let summary = `📋 <b>TASDIQLASH</b>\n\n`;
+      summary += `📦 ${escapeHtml(request.smetaItem?.name || '')}\n`;
+      summary += `📊 Tasdiqlangan miqdor: ${approvedQty} ${request.smetaItem?.unit || ''}\n`;
+      summary += `💰 Narx: ${formatMoneyFull(approvedAmount)}\n`;
+      summary += `🚚 Haydovchi: ${escapeHtml(selectedDriver?.name || '')}\n`;
+
+      await ctx.reply(summary, {
+        parse_mode: 'HTML',
+        reply_markup: buildConfirmationKeyboard('supapp', { withEdit: false }),
+      });
+
+      const confirmCtx = await waitForCallbackOrCancel(conversation, ctx, /^supapp:(confirm|cancel)/, {
+        otherwise: (ctx) => ctx.reply('Iltimos, tasdiqlang yoki bekor qiling.'),
+      });
+      try { await confirmCtx.answerCallbackQuery(); } catch {}
+
+      if (confirmCtx.callbackQuery!.data === 'supapp:cancel') {
+        await ctx.reply('Bekor qilindi. ❌');
+        return;
+      }
+
+      try {
+        await conversation.external(() =>
+          requestsService.approveAndAssign(requestId, {
+            approvedQty,
+            approvedAmount,
+            driverId,
+          }, user),
+        );
+        await ctx.reply(
+          `Zayavka tasdiqlandi! ✅\n\n` +
+          `🚚 ${escapeHtml(selectedDriver?.name || '')} ga tayinlandi.`,
+        );
+      } catch (err: any) {
+        console.error('[supplyApproveRequest] error:', err?.message || err);
+        await ctx.reply('Tasdiqlashda xatolik yuz berdi. ❌');
+      }
     };
   }
 }

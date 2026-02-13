@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
-import { RequestStatus } from 'src/common/database/schemas';
+import { CashRequestStatus } from 'src/common/database/schemas';
 
 export class CashRequestResponseDto {
   @ApiProperty()
@@ -21,8 +21,8 @@ export class CashRequestResponseDto {
   @ApiPropertyOptional()
   neededBy: Date | null;
 
-  @ApiProperty({ enum: RequestStatus })
-  status: RequestStatus;
+  @ApiProperty({ enum: CashRequestStatus })
+  status: CashRequestStatus;
 
   @ApiPropertyOptional()
   approvedById: string | null;

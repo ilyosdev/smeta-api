@@ -141,6 +141,22 @@ export class VendorCashRegistersRepository {
     return { ...r.cashRegister, user: r.user };
   }
 
+  async findCashRegisterByProjectId(projectId: string): Promise<CashRegisterWithRelations | null> {
+    const results = await this.db
+      .select({
+        cashRegister: cashRegisters,
+        user: { id: users.id, name: users.name },
+      })
+      .from(cashRegisters)
+      .innerJoin(users, eq(cashRegisters.userId, users.id))
+      .where(eq(cashRegisters.projectId, projectId));
+
+    if (results.length === 0) return null;
+
+    const r = results[0];
+    return { ...r.cashRegister, user: r.user };
+  }
+
   async getCashRegisterOrgId(cashRegisterId: string): Promise<string | null> {
     const results = await this.db
       .select({ orgId: users.orgId })

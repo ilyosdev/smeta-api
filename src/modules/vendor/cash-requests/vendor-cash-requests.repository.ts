@@ -6,7 +6,7 @@ import { Drizzle, DRIZZLE_ORM } from 'src/common/database/drizzle.module';
 import {
   NewCashRequest,
   CashRequest,
-  RequestStatus,
+  CashRequestStatus,
   cashRequests,
   projects,
   users,
@@ -34,7 +34,7 @@ export class VendorCashRequestsRepository {
     params: {
       page: number;
       limit: number;
-      status?: RequestStatus;
+      status?: CashRequestStatus;
       projectId?: string;
     },
   ): Promise<{ data: CashRequestWithRelations[]; total: number }> {
